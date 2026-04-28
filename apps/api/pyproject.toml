@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "enterprise-rag-api"
+version = "0.1.0"
+description = "Enterprise knowledge base RAG API"
+requires-python = ">=3.9"
+dependencies = [
+  "asyncpg>=0.29.0",
+  "fastapi>=0.115.0",
+  "greenlet>=3.0.0",
+  "httpx>=0.27.0",
+  "pgvector>=0.3.0",
+  "pydantic-settings>=2.4.0",
+  "python-dotenv>=1.0.1",
+  "python-multipart>=0.0.9",
+  "sqlalchemy[asyncio]>=2.0.30",
+  "uvicorn[standard]>=0.30.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2.0",
+  "pytest-asyncio>=0.23.0",
+  "ruff>=0.6.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

@@ -1,0 +1,86 @@
+export type KnowledgeBase = {
+  id: string;
+  name: string;
+  description: string;
+  visibility: string;
+  retrieval_policy: {
+    top_k: number;
+    vector_weight: number;
+    keyword_weight: number;
+    reranker: string;
+  };
+  created_at: string;
+};
+
+export type DocumentRecord = {
+  id: string;
+  kb_id: string;
+  filename: string;
+  mime_type: string;
+  status: "pending" | "processing" | "indexed" | "failed";
+  parser: string;
+  metadata: Record<string, unknown>;
+  error_message?: string;
+  created_at: string;
+};
+
+export type Citation = {
+  chunk_id: string;
+  document_id: string;
+  filename: string;
+  score: number;
+  content: string;
+  metadata: Record<string, unknown>;
+};
+
+export type ChatResponse = {
+  session_id: string;
+  answer: string;
+  citations: Citation[];
+  retrieval_trace: Record<string, unknown>;
+};
+
+const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8001/api/v1";
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, init);
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  return response.json() as Promise<T>;
+}
+
+export function listKnowledgeBases() {
+  return request<KnowledgeBase[]>("/knowledge-bases");
+}
+
+export function createKnowledgeBase(payload: Pick<KnowledgeBase, "name" | "description" | "visibility">) {
+  return request<KnowledgeBase>("/knowledge-bases", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function listDocuments(kbId: string) {
+  return request<DocumentRecord[]>(`/documents?kb_id=${kbId}`);
+}
+
+export function uploadDocument(kbId: string, file: File, parser = "auto") {
+  const body = new FormData();
+  body.set("kb_id", kbId);
+  body.set("parser", parser);
+  body.set("file", file);
+  return request<DocumentRecord>("/documents/upload", {
+    method: "POST",
+    body,
+  });
+}
+
+export function sendChat(kbId: string, message: string, sessionId?: string) {
+  return request<ChatResponse>("/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ kb_id: kbId, message, session_id: sessionId, top_k: 8 }),
+  });
+}
