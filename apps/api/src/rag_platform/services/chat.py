@@ -1,6 +1,7 @@
 import uuid
 from typing import List
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from rag_platform.db.models import ChatMessage, ChatSession
@@ -25,15 +26,35 @@ class ChatService:
         session_id: uuid.UUID = None,
         top_k: int = 8,
     ) -> ChatResponse:
-        chat_session = ChatSession(
-            id=session_id or uuid.uuid4(),
-            tenant_id=tenant_id,
-            kb_id=kb_id,
-            user_id=user_id,
-            title=message[:80],
-        )
         if session_id is None:
+            chat_session = ChatSession(
+                id=uuid.uuid4(),
+                tenant_id=tenant_id,
+                kb_id=kb_id,
+                user_id=user_id,
+                title=message[:80],
+            )
             session.add(chat_session)
+            await session.flush()
+        else:
+            result = await session.execute(
+                select(ChatSession).where(
+                    ChatSession.id == session_id,
+                    ChatSession.tenant_id == tenant_id,
+                    ChatSession.kb_id == kb_id,
+                )
+            )
+            chat_session = result.scalar_one_or_none()
+            if chat_session is None:
+                chat_session = ChatSession(
+                    id=session_id,
+                    tenant_id=tenant_id,
+                    kb_id=kb_id,
+                    user_id=user_id,
+                    title=message[:80],
+                )
+                session.add(chat_session)
+                await session.flush()
 
         session.add(ChatMessage(session_id=chat_session.id, role=MessageRole.user.value, content=message))
         chunks, trace = await self.retriever.retrieve(session, tenant_id, kb_id, message, top_k=top_k)
@@ -64,4 +85,3 @@ class ChatService:
             citations=citations,
             retrieval_trace=trace,
         )
-

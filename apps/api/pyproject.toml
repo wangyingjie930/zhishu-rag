@@ -12,6 +12,7 @@ dependencies = [
   "fastapi>=0.115.0",
   "greenlet>=3.0.0",
   "httpx>=0.27.0",
+  "llama-index-core>=0.10.0,<0.11.0",
   "pgvector>=0.3.0",
   "pydantic-settings>=2.4.0",
   "python-dotenv>=1.0.1",

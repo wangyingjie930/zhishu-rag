@@ -45,6 +45,7 @@ class KnowledgeBase(Base, TimestampMixin):
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     visibility: Mapped[str] = mapped_column(Text, nullable=False, default="private")
     retrieval_policy: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    ingestion_policy: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     documents: Mapped[list["Document"]] = relationship(back_populates="knowledge_base")
 
 
@@ -117,4 +118,3 @@ class AuditLog(Base, TimestampMixin):
     resource_type: Mapped[str] = mapped_column(Text, nullable=False)
     resource_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=True)
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
-

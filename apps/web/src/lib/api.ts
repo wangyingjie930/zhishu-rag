@@ -54,7 +54,7 @@ export function listKnowledgeBases() {
   return request<KnowledgeBase[]>("/knowledge-bases");
 }
 
-export function createKnowledgeBase(payload: Pick<KnowledgeBase, "name" | "description" | "visibility">) {
+export function createKnowledgeBase(payload: Pick<KnowledgeBase, "name" | "description" | "visibility"> & { ingestion_policy?: Record<string, unknown> }) {
   return request<KnowledgeBase>("/knowledge-bases", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

@@ -11,6 +11,7 @@ class KnowledgeBaseOut(BaseModel):
     description: str
     visibility: str
     retrieval_policy: Dict[str, Any]
+    ingestion_policy: Dict[str, Any]
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -20,6 +21,7 @@ class KnowledgeBaseCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     description: str = ""
     visibility: str = "private"
+    ingestion_policy: Dict[str, Any] = Field(default_factory=dict)
 
 
 class DocumentOut(BaseModel):

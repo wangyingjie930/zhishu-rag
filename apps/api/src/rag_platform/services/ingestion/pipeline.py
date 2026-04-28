@@ -2,16 +2,18 @@ import hashlib
 import uuid
 from pathlib import Path
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from rag_platform.core.config import settings
-from rag_platform.db.models import Document, DocumentChunk
+from rag_platform.db.models import Document, DocumentChunk, KnowledgeBase
 from rag_platform.domain.enums import DocumentStatus
 from rag_platform.services.ingestion.embeddings import DeterministicEmbeddingProvider, EmbeddingProvider
 from rag_platform.services.ingestion.strategies import (
+    ChunkerRegistry,
     DefaultPreprocessor,
     ParserRegistry,
-    RecursiveTextChunker,
+    default_ingestion_policy,
 )
 
 
@@ -19,7 +21,7 @@ class IngestionPipeline:
     def __init__(self, embedding_provider: EmbeddingProvider = None) -> None:
         self.parsers = ParserRegistry()
         self.preprocessor = DefaultPreprocessor()
-        self.chunker = RecursiveTextChunker()
+        self.chunkers = ChunkerRegistry()
         self.embedding_provider = embedding_provider or DeterministicEmbeddingProvider()
 
     async def ingest_upload(
@@ -52,9 +54,11 @@ class IngestionPipeline:
         await session.flush()
 
         try:
+            ingestion_policy = await self._load_ingestion_policy(session, tenant_id, kb_id)
             raw_text = self.parsers.get(parser).parse(filename, payload)
             clean_text = self.preprocessor.clean(raw_text)
-            for chunk in self.chunker.split(clean_text):
+            chunker = self.chunkers.get(ingestion_policy)
+            for chunk in chunker.split(clean_text):
                 embedding = await self.embedding_provider.embed(chunk.content)
                 session.add(
                     DocumentChunk(
@@ -66,8 +70,8 @@ class IngestionPipeline:
                         token_count=chunk.token_count,
                         metadata_={
                             "parser": parser,
-                            "chunker": "recursive_text",
                             "checksum": checksum,
+                            **chunk.metadata,
                         },
                         embedding=embedding,
                     )
@@ -81,3 +85,16 @@ class IngestionPipeline:
         await session.refresh(document)
         return document
 
+    async def _load_ingestion_policy(
+        self,
+        session: AsyncSession,
+        tenant_id: uuid.UUID,
+        kb_id: uuid.UUID,
+    ) -> dict:
+        result = await session.execute(
+            select(KnowledgeBase.ingestion_policy).where(
+                KnowledgeBase.tenant_id == tenant_id,
+                KnowledgeBase.id == kb_id,
+            )
+        )
+        return result.scalar_one_or_none() or default_ingestion_policy()

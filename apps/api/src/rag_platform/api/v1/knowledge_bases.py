@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from rag_platform.db.models import KnowledgeBase
 from rag_platform.db.session import get_session
 from rag_platform.schemas.rag import KnowledgeBaseCreate, KnowledgeBaseOut
+from rag_platform.services.ingestion.strategies import default_ingestion_policy
 from rag_platform.services.security.context import RequestContext, get_request_context
 
 router = APIRouter()
@@ -30,6 +31,15 @@ async def create_knowledge_base(
     session: AsyncSession = Depends(get_session),
     context: RequestContext = Depends(get_request_context),
 ) -> KnowledgeBase:
+    policy = default_ingestion_policy()
+    if payload.ingestion_policy:
+        if "chunker" in payload.ingestion_policy:
+            policy["chunker"].update(payload.ingestion_policy["chunker"])
+        if "parser" in payload.ingestion_policy:
+            policy["parser"] = payload.ingestion_policy["parser"]
+        if "preprocessor" in payload.ingestion_policy:
+            policy["preprocessor"] = payload.ingestion_policy["preprocessor"]
+
     kb = KnowledgeBase(
         id=uuid.uuid4(),
         tenant_id=context.tenant_id,
@@ -42,9 +52,9 @@ async def create_knowledge_base(
             "keyword_weight": 0.35,
             "reranker": "none",
         },
+        ingestion_policy=policy,
     )
     session.add(kb)
     await session.commit()
     await session.refresh(kb)
     return kb
-
