@@ -34,8 +34,10 @@ import {
 import {
   ChatResponse,
   DocumentRecord,
+  EmbeddingModelOption,
   KnowledgeBase,
   createKnowledgeBase,
+  listEmbeddingModels,
   listDocuments,
   listKnowledgeBases,
   sendChat,
@@ -56,6 +58,8 @@ const SUGGESTED_QUESTIONS = [
   "查看最新流程规范",
 ];
 
+const DEFAULT_EMBEDDING_MODEL = "google:gemini-embedding-001";
+
 export function App() {
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
   const [activeKbId, setActiveKbId] = useState("");
@@ -69,6 +73,8 @@ export function App() {
   const [isPanelOpen, setIsPanelOpen] = useState(true);
   const [panelTab, setPanelTab] = useState<PanelTab>("kb");
   const [isDragging, setIsDragging] = useState(false);
+  const [embeddingModels, setEmbeddingModels] = useState<EmbeddingModelOption[]>([]);
+  const [selectedEmbeddingModel, setSelectedEmbeddingModel] = useState(DEFAULT_EMBEDDING_MODEL);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
@@ -80,11 +86,14 @@ export function App() {
 
   async function refresh() {
     try {
-      const kbs = await listKnowledgeBases();
+      const [kbs, models] = await Promise.all([listKnowledgeBases(), listEmbeddingModels()]);
       setKnowledgeBases(kbs);
+      setEmbeddingModels(models);
       const selected = activeKbId || kbs[0]?.id || "";
       setActiveKbId(selected);
       if (selected) setDocuments(await listDocuments(selected));
+      const activePolicy = kbs.find((item) => item.id === selected)?.ingestion_policy;
+      setSelectedEmbeddingModel(activePolicy?.embedding?.model ?? models[0]?.id ?? DEFAULT_EMBEDDING_MODEL);
       setStatus("在线");
     } catch (error: unknown) {
       setStatus(error instanceof Error ? error.message : "连接失败");
@@ -97,10 +106,12 @@ export function App() {
 
   useEffect(() => {
     if (!activeKbId) return;
+    const activePolicy = knowledgeBases.find((item) => item.id === activeKbId)?.ingestion_policy;
+    if (activePolicy?.embedding?.model) setSelectedEmbeddingModel(activePolicy.embedding.model);
     listDocuments(activeKbId)
       .then(setDocuments)
       .catch((e: unknown) => setStatus(e instanceof Error ? e.message : "加载失败"));
-  }, [activeKbId]);
+  }, [activeKbId, knowledgeBases]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -120,8 +131,21 @@ export function App() {
     if (!file || !activeKbId) return;
     setBusy(true);
     try {
-      const doc = await uploadDocument(activeKbId, file);
+      const doc = await uploadDocument(activeKbId, file, "auto", selectedEmbeddingModel);
       setDocuments((prev) => [doc, ...prev]);
+      setKnowledgeBases((prev) =>
+        prev.map((kb) =>
+          kb.id === activeKbId
+            ? {
+                ...kb,
+                ingestion_policy: {
+                  ...kb.ingestion_policy,
+                  embedding: { model: selectedEmbeddingModel },
+                },
+              }
+            : kb,
+        ),
+      );
       openPanel("docs");
     } finally {
       setBusy(false);
@@ -145,15 +169,20 @@ export function App() {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
     const strategy = String(data.get("strategy") || "semantic_hybrid");
+    const embeddingModel = String(data.get("embedding_model") || selectedEmbeddingModel);
     const kb = await createKnowledgeBase({
       name: String(data.get("name") || ""),
       description: String(data.get("description") || ""),
       visibility: "private",
-      ingestion_policy: { chunker: { strategy } },
+      ingestion_policy: {
+        embedding: { model: embeddingModel },
+        chunker: { strategy },
+      },
     });
     event.currentTarget.reset();
     setKnowledgeBases((prev) => [...prev, kb]);
     setActiveKbId(kb.id);
+    setSelectedEmbeddingModel(embeddingModel);
     openPanel("docs");
   }
 
@@ -208,6 +237,21 @@ export function App() {
     { id: "governance", label: "治理", icon: <ShieldCheck size={14} /> },
   ];
 
+  const embeddingSelect = (
+    <select
+      aria-label="Embedding 模型"
+      className="embedding-select"
+      onChange={(event) => setSelectedEmbeddingModel(event.target.value)}
+      value={selectedEmbeddingModel}
+    >
+      {embeddingModels.map((model) => (
+        <option disabled={!model.enabled} key={model.id} value={model.id}>
+          {model.label} · {model.dimensions}d{model.enabled ? "" : ` · ${model.reason}`}
+        </option>
+      ))}
+    </select>
+  );
+
   // ── KB tab ────────────────────────────────────────────────────
 
   const kbPanel = (
@@ -254,6 +298,13 @@ export function App() {
           <option value="token">Token拆分 (Token)</option>
           <option value="recursive_text">递归文本拆分 (Recursive Text)</option>
         </select>
+        <select name="embedding_model" aria-label="Embedding 模型" defaultValue={selectedEmbeddingModel}>
+          {embeddingModels.map((model) => (
+            <option disabled={!model.enabled} key={model.id} value={model.id}>
+              {model.label} · {model.dimensions}d{model.enabled ? "" : ` · ${model.reason}`}
+            </option>
+          ))}
+        </select>
         <button className="btn-primary" type="submit">
           <Plus size={14} />
           创建
@@ -275,6 +326,10 @@ export function App() {
           上传
           <input type="file" onChange={onUpload} />
         </label>
+      </div>
+      <div className="upload-model-row">
+        <Activity size={13} />
+        {embeddingSelect}
       </div>
 
       {documents.length === 0 ? (
@@ -389,6 +444,19 @@ export function App() {
           <FileText size={15} />
           <span>{documents.length}</span>
         </button>
+
+        <select
+          aria-label="上传使用的 Embedding 模型"
+          className="header-model-select"
+          onChange={(event) => setSelectedEmbeddingModel(event.target.value)}
+          value={selectedEmbeddingModel}
+        >
+          {embeddingModels.map((model) => (
+            <option disabled={!model.enabled} key={model.id} value={model.id}>
+              {model.label}
+            </option>
+          ))}
+        </select>
 
         <label className="header-upload-btn" title="上传文档到当前知识库">
           {busy ? <Loader2 className="spin" size={14} /> : <FileUp size={14} />}

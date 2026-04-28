@@ -22,8 +22,9 @@ class Settings(BaseSettings):
     object_storage_bucket: str = "rag-documents"
     object_storage_access_key: str = "minio"
     object_storage_secret_key: str = "minio123"
-    embedding_model: str = "text-embedding-3-large"
+    embedding_model: str = "google:gemini-embedding-001"
     embedding_dim: int = 1536
+    google_api_key: str = ""
     llm_provider: str = "mock"
     openai_api_key: str = ""
     web_origin: str = "http://localhost:5173"

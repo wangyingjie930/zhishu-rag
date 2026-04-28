@@ -1,6 +1,4 @@
 import re
-import hashlib
-import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Protocol
 
@@ -13,6 +11,8 @@ from llama_index.core.node_parser import (
     TokenTextSplitter,
 )
 from llama_index.core.utils import get_tokenizer
+
+from rag_platform.services.ingestion.embeddings import DEFAULT_EMBEDDING_MODEL_ID
 
 
 class Parser(Protocol):
@@ -105,6 +105,7 @@ def default_ingestion_policy() -> Dict[str, Any]:
     return {
         "parser": "auto",
         "preprocessor": "default",
+        "embedding": {"model": DEFAULT_EMBEDDING_MODEL_ID},
         "chunker": ChunkingPolicy().to_metadata(),
     }
 
@@ -120,37 +121,6 @@ def _sentence_splitter_for(language: str):
     return chinese_sentence_tokenizer if language.lower().startswith("zh") else None
 
 
-class DeterministicLlamaEmbedding(BaseEmbedding):
-    """小型的本地嵌入适配器，以便 LlamaIndex 语义拆分能在开发/测试环境中运行。
-
-    生产环境可以使用 DashScope/OpenAI 等 LlamaIndex 嵌入进行替换，而无需更改分块流水线约定。
-    """
-
-    dimensions: int = 256
-
-    def _embed(self, text: str) -> List[float]:
-        values: List[float] = []
-        counter = 0
-        while len(values) < self.dimensions:
-            digest = hashlib.sha256(f"{counter}:{text}".encode("utf-8")).digest()
-            for byte in digest:
-                values.append((byte / 255.0) - 0.5)
-                if len(values) == self.dimensions:
-                    break
-            counter += 1
-        norm = math.sqrt(sum(value * value for value in values)) or 1.0
-        return [value / norm for value in values]
-
-    def _get_text_embedding(self, text: str) -> List[float]:
-        return self._embed(text)
-
-    def _get_query_embedding(self, query: str) -> List[float]:
-        return self._embed(query)
-
-    async def _aget_query_embedding(self, query: str) -> List[float]:
-        return self._embed(query)
-
-
 class LlamaIndexChunker:
     """LlamaIndex 节点解析器的适配器。
 
@@ -164,7 +134,7 @@ class LlamaIndexChunker:
     ) -> None:
         self.policy = policy or ChunkingPolicy()
         self.tokenizer = get_tokenizer()
-        self.semantic_embed_model = semantic_embed_model or DeterministicLlamaEmbedding()
+        self.semantic_embed_model = semantic_embed_model
 
     def split(self, text: str) -> Iterable[Chunk]:
         strategy = self.policy.strategy
@@ -195,6 +165,8 @@ class LlamaIndexChunker:
                 original_text_metadata_key="original_text",
             )
         if strategy == "semantic":
+            if self.semantic_embed_model is None:
+                raise ValueError("Semantic chunking requires a real LlamaIndex embedding model")
             return SemanticSplitterNodeParser(
                 buffer_size=self.policy.semantic_buffer_size,
                 breakpoint_percentile_threshold=self.policy.semantic_threshold,
@@ -291,14 +263,18 @@ class RecursiveTextChunker:
 
 
 class ChunkerRegistry:
-    def get(self, policy: Optional[Dict[str, Any]] = None) -> Chunker:
+    def get(
+        self,
+        policy: Optional[Dict[str, Any]] = None,
+        semantic_embed_model: Optional[BaseEmbedding] = None,
+    ) -> Chunker:
         chunking_policy = ChunkingPolicy.from_dict(policy)
         if chunking_policy.strategy == "recursive_text":
             return RecursiveTextChunker(
                 chunk_size=chunking_policy.chunk_size,
                 overlap=chunking_policy.chunk_overlap,
             )
-        return LlamaIndexChunker(chunking_policy)
+        return LlamaIndexChunker(chunking_policy, semantic_embed_model=semantic_embed_model)
 
 
 class ParserRegistry:

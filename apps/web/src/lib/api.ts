@@ -9,7 +9,21 @@ export type KnowledgeBase = {
     keyword_weight: number;
     reranker: string;
   };
+  ingestion_policy: {
+    embedding?: { model?: string };
+    chunker?: Record<string, unknown>;
+  };
   created_at: string;
+};
+
+export type EmbeddingModelOption = {
+  id: string;
+  label: string;
+  provider: string;
+  model: string;
+  dimensions: number;
+  enabled: boolean;
+  reason: string;
 };
 
 export type DocumentRecord = {
@@ -54,6 +68,10 @@ export function listKnowledgeBases() {
   return request<KnowledgeBase[]>("/knowledge-bases");
 }
 
+export function listEmbeddingModels() {
+  return request<EmbeddingModelOption[]>("/embedding-models");
+}
+
 export function createKnowledgeBase(payload: Pick<KnowledgeBase, "name" | "description" | "visibility"> & { ingestion_policy?: Record<string, unknown> }) {
   return request<KnowledgeBase>("/knowledge-bases", {
     method: "POST",
@@ -66,10 +84,11 @@ export function listDocuments(kbId: string) {
   return request<DocumentRecord[]>(`/documents?kb_id=${kbId}`);
 }
 
-export function uploadDocument(kbId: string, file: File, parser = "auto") {
+export function uploadDocument(kbId: string, file: File, parser = "auto", embeddingModel = "") {
   const body = new FormData();
   body.set("kb_id", kbId);
   body.set("parser", parser);
+  if (embeddingModel) body.set("embedding_model", embeddingModel);
   body.set("file", file);
   return request<DocumentRecord>("/documents/upload", {
     method: "POST",

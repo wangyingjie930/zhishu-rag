@@ -35,6 +35,9 @@ async def create_knowledge_base(
     if payload.ingestion_policy:
         if "chunker" in payload.ingestion_policy:
             policy["chunker"].update(payload.ingestion_policy["chunker"])
+        if "embedding" in payload.ingestion_policy:
+            # 创建时固化真实 embedding 选择，避免上传时回退到隐式默认值。
+            policy["embedding"].update(payload.ingestion_policy["embedding"])
         if "parser" in payload.ingestion_policy:
             policy["parser"] = payload.ingestion_policy["parser"]
         if "preprocessor" in payload.ingestion_policy:

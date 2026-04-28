@@ -32,6 +32,7 @@ async def list_documents(
 async def upload_document(
     kb_id: uuid.UUID = Form(...),
     parser: str = Form("auto"),
+    embedding_model: str = Form(""),
     file: UploadFile = File(...),
     session: AsyncSession = Depends(get_session),
     context: RequestContext = Depends(get_request_context),
@@ -46,5 +47,5 @@ async def upload_document(
         mime_type=file.content_type or "application/octet-stream",
         payload=payload,
         parser=parser,
+        embedding_model=embedding_model or None,
     )
-

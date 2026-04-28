@@ -2,10 +2,15 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from rag_platform.services.ingestion.embeddings import DeterministicEmbeddingProvider, EmbeddingProvider
+from rag_platform.db.models import KnowledgeBase
+from rag_platform.services.ingestion.embeddings import (
+    DEFAULT_EMBEDDING_MODEL_ID,
+    EmbeddingProvider,
+    EmbeddingProviderRegistry,
+)
 
 
 @dataclass(frozen=True)
@@ -20,7 +25,8 @@ class RetrievedChunk:
 
 class HybridRetriever:
     def __init__(self, embedding_provider: EmbeddingProvider = None) -> None:
-        self.embedding_provider = embedding_provider or DeterministicEmbeddingProvider()
+        self.embedding_provider = embedding_provider
+        self.embedding_providers = EmbeddingProviderRegistry()
 
     async def retrieve(
         self,
@@ -30,8 +36,20 @@ class HybridRetriever:
         query: str,
         top_k: int = 8,
     ) -> tuple[List[RetrievedChunk], Dict[str, Any]]:
-        embedding = await self.embedding_provider.embed(query)
-        vector_rows = await self._vector_search(session, tenant_id, kb_id, embedding, top_k * 2)
+        embedding_model = await self._load_embedding_model(session, tenant_id, kb_id)
+        embedding_provider = self.embedding_provider or self.embedding_providers.get(
+            embedding_model,
+            usage="query",
+        )
+        embedding = await embedding_provider.embed(query)
+        vector_rows = await self._vector_search(
+            session,
+            tenant_id,
+            kb_id,
+            embedding,
+            embedding_model,
+            top_k * 2,
+        )
         keyword_rows = await self._keyword_search(session, tenant_id, kb_id, query, top_k * 2)
         fused = self._rrf(vector_rows, keyword_rows)[:top_k]
         trace = {
@@ -39,9 +57,25 @@ class HybridRetriever:
             "vector_candidates": len(vector_rows),
             "keyword_candidates": len(keyword_rows),
             "top_k": top_k,
+            "embedding_model": embedding_model,
             "reranker": "none",
         }
         return fused, trace
+
+    async def _load_embedding_model(
+        self,
+        session: AsyncSession,
+        tenant_id: uuid.UUID,
+        kb_id: uuid.UUID,
+    ) -> str:
+        result = await session.execute(
+            select(KnowledgeBase.ingestion_policy).where(
+                KnowledgeBase.tenant_id == tenant_id,
+                KnowledgeBase.id == kb_id,
+            )
+        )
+        policy = result.scalar_one_or_none() or {}
+        return policy.get("embedding", {}).get("model", DEFAULT_EMBEDDING_MODEL_ID)
 
     async def _vector_search(
         self,
@@ -49,6 +83,7 @@ class HybridRetriever:
         tenant_id: uuid.UUID,
         kb_id: uuid.UUID,
         embedding: List[float],
+        embedding_model: str,
         limit: int,
     ) -> List[RetrievedChunk]:
         vector_literal = "[" + ",".join(f"{value:.8f}" for value in embedding) + "]"
@@ -67,6 +102,10 @@ class HybridRetriever:
                 WHERE c.tenant_id = :tenant_id
                   AND c.kb_id = :kb_id
                   AND c.embedding IS NOT NULL
+                  AND COALESCE(
+                    c.metadata->'embedding'->>'model',
+                    :default_embedding_model
+                  ) = :embedding_model
                 ORDER BY c.embedding <=> CAST(:embedding AS vector)
                 LIMIT :limit
                 """
@@ -75,6 +114,8 @@ class HybridRetriever:
                 "tenant_id": tenant_id,
                 "kb_id": kb_id,
                 "embedding": vector_literal,
+                "embedding_model": embedding_model,
+                "default_embedding_model": DEFAULT_EMBEDDING_MODEL_ID,
                 "limit": limit,
             },
         )
@@ -145,4 +186,3 @@ class HybridRetriever:
             score=float(row["score"] or 0.0),
             metadata=dict(row["metadata"] or {}),
         )
-
