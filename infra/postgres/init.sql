@@ -26,12 +26,12 @@ CREATE TABLE IF NOT EXISTS knowledge_bases (
   description text NOT NULL DEFAULT '',
   visibility text NOT NULL DEFAULT 'private',
   retrieval_policy jsonb NOT NULL DEFAULT '{"top_k": 8, "vector_weight": 0.65, "keyword_weight": 0.35, "reranker": "none"}',
-  ingestion_policy jsonb NOT NULL DEFAULT '{"parser": "auto", "preprocessor": "default", "embedding": {"model": "google:gemini-embedding-001"}, "chunker": {"strategy": "semantic_hybrid", "language": "zh", "chunk_size": 900, "chunk_overlap": 120, "window_size": 2, "max_chunk_size": 1200, "semantic_buffer_size": 1, "semantic_threshold": 95}}',
+  ingestion_policy jsonb NOT NULL DEFAULT '{"parser": "auto", "preprocessor": "default", "embedding": {"model": "google:gemini-embedding-001"}, "chunker": {"strategy": "adaptive", "language": "zh", "chunk_size": 900, "chunk_overlap": 135, "overlap_ratio": 0.15, "window_size": 2, "max_chunk_size": 1200, "semantic_buffer_size": 1, "semantic_threshold": 95}}',
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
 ALTER TABLE knowledge_bases
-  ADD COLUMN IF NOT EXISTS ingestion_policy jsonb NOT NULL DEFAULT '{"parser": "auto", "preprocessor": "default", "embedding": {"model": "google:gemini-embedding-001"}, "chunker": {"strategy": "semantic_hybrid", "language": "zh", "chunk_size": 900, "chunk_overlap": 120, "window_size": 2, "max_chunk_size": 1200, "semantic_buffer_size": 1, "semantic_threshold": 95}}';
+  ADD COLUMN IF NOT EXISTS ingestion_policy jsonb NOT NULL DEFAULT '{"parser": "auto", "preprocessor": "default", "embedding": {"model": "google:gemini-embedding-001"}, "chunker": {"strategy": "adaptive", "language": "zh", "chunk_size": 900, "chunk_overlap": 135, "overlap_ratio": 0.15, "window_size": 2, "max_chunk_size": 1200, "semantic_buffer_size": 1, "semantic_threshold": 95}}';
 
 CREATE TABLE IF NOT EXISTS documents (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),

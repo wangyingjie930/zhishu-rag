@@ -38,6 +38,25 @@ class DocumentOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ChunkPreviewItem(BaseModel):
+    index: int
+    content: str
+    token_count: int
+    character_count: int
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class DocumentChunkPreviewOut(BaseModel):
+    filename: str
+    mime_type: str
+    parser: str
+    chunking_policy: Dict[str, Any]
+    clean_text_length: int
+    total_chunks: int
+    chunks: List[ChunkPreviewItem]
+    truncated: bool = False
+
+
 class Citation(BaseModel):
     chunk_id: uuid.UUID
     document_id: uuid.UUID

@@ -1,3 +1,5 @@
+import type { ChunkingPolicyInput } from "./chunkingPolicy";
+
 export type KnowledgeBase = {
   id: string;
   name: string;
@@ -38,6 +40,25 @@ export type DocumentRecord = {
   created_at: string;
 };
 
+export type ChunkPreviewItem = {
+  index: number;
+  content: string;
+  token_count: number;
+  character_count: number;
+  metadata: Record<string, unknown>;
+};
+
+export type DocumentChunkPreview = {
+  filename: string;
+  mime_type: string;
+  parser: string;
+  chunking_policy: Record<string, unknown>;
+  clean_text_length: number;
+  total_chunks: number;
+  chunks: ChunkPreviewItem[];
+  truncated: boolean;
+};
+
 export type Citation = {
   chunk_id: string;
   document_id: string;
@@ -72,7 +93,11 @@ export function listEmbeddingModels() {
   return request<EmbeddingModelOption[]>("/embedding-models");
 }
 
-export function createKnowledgeBase(payload: Pick<KnowledgeBase, "name" | "description" | "visibility"> & { ingestion_policy?: Record<string, unknown> }) {
+export function createKnowledgeBase(
+  payload: Pick<KnowledgeBase, "name" | "description" | "visibility"> & {
+    ingestion_policy?: Record<string, unknown>;
+  },
+) {
   return request<KnowledgeBase>("/knowledge-bases", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -84,15 +109,45 @@ export function listDocuments(kbId: string) {
   return request<DocumentRecord[]>(`/documents?kb_id=${kbId}`);
 }
 
-export function uploadDocument(kbId: string, file: File, parser = "auto", embeddingModel = "") {
+function buildDocumentFormData(
+  kbId: string,
+  file: File,
+  parser: string,
+  embeddingModel: string,
+  chunkingPolicy?: ChunkingPolicyInput,
+) {
   const body = new FormData();
   body.set("kb_id", kbId);
   body.set("parser", parser);
   if (embeddingModel) body.set("embedding_model", embeddingModel);
+  if (chunkingPolicy) body.set("chunking_policy", JSON.stringify(chunkingPolicy));
   body.set("file", file);
+  return body;
+}
+
+export function previewDocumentChunks(
+  kbId: string,
+  file: File,
+  parser = "auto",
+  embeddingModel = "",
+  chunkingPolicy?: ChunkingPolicyInput,
+) {
+  return request<DocumentChunkPreview>("/documents/preview", {
+    method: "POST",
+    body: buildDocumentFormData(kbId, file, parser, embeddingModel, chunkingPolicy),
+  });
+}
+
+export function uploadDocument(
+  kbId: string,
+  file: File,
+  parser = "auto",
+  embeddingModel = "",
+  chunkingPolicy?: ChunkingPolicyInput,
+) {
   return request<DocumentRecord>("/documents/upload", {
     method: "POST",
-    body,
+    body: buildDocumentFormData(kbId, file, parser, embeddingModel, chunkingPolicy),
   });
 }
 

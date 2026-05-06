@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from rag_platform.db.models import KnowledgeBase
 from rag_platform.db.session import get_session
 from rag_platform.schemas.rag import KnowledgeBaseCreate, KnowledgeBaseOut
-from rag_platform.services.ingestion.strategies import default_ingestion_policy
+from rag_platform.services.ingestion.strategies import ChunkingPolicy, default_ingestion_policy
 from rag_platform.services.security.context import RequestContext, get_request_context
 
 router = APIRouter()
@@ -20,7 +20,9 @@ async def list_knowledge_bases(
     context: RequestContext = Depends(get_request_context),
 ) -> List[KnowledgeBase]:
     result = await session.execute(
-        select(KnowledgeBase).where(KnowledgeBase.tenant_id == context.tenant_id).order_by(KnowledgeBase.created_at)
+        select(KnowledgeBase)
+        .where(KnowledgeBase.tenant_id == context.tenant_id)
+        .order_by(KnowledgeBase.created_at)
     )
     return list(result.scalars())
 
@@ -42,6 +44,7 @@ async def create_knowledge_base(
             policy["parser"] = payload.ingestion_policy["parser"]
         if "preprocessor" in payload.ingestion_policy:
             policy["preprocessor"] = payload.ingestion_policy["preprocessor"]
+    policy["chunker"] = ChunkingPolicy.from_dict(policy).normalized().to_metadata()
 
     kb = KnowledgeBase(
         id=uuid.uuid4(),

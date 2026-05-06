@@ -178,11 +178,21 @@ class HybridRetriever:
         ]
 
     def _row_to_chunk(self, row: Any) -> RetrievedChunk:
+        metadata = dict(row["metadata"] or {})
+        content = row["content"]
+        parent_text = metadata.get("parent_text")
+        if metadata.get("chunker") == "parent_child" and isinstance(parent_text, str):
+            metadata = {
+                **metadata,
+                "matched_child_content": content,
+            }
+            content = parent_text
+
         return RetrievedChunk(
             chunk_id=row["chunk_id"],
             document_id=row["document_id"],
             filename=row["filename"],
-            content=row["content"],
+            content=content,
             score=float(row["score"] or 0.0),
-            metadata=dict(row["metadata"] or {}),
+            metadata=metadata,
         )

@@ -1,8 +1,8 @@
 import {
-  ChangeEvent,
-  DragEvent as ReactDragEvent,
-  FormEvent,
-  KeyboardEvent,
+  type ChangeEvent,
+  type DragEvent as ReactDragEvent,
+  type FormEvent,
+  type KeyboardEvent,
   type ReactNode,
   useEffect,
   useMemo,
@@ -10,7 +10,6 @@ import {
   useState,
 } from "react";
 import {
-  Activity,
   AlertCircle,
   BookOpen,
   Bot,
@@ -32,17 +31,23 @@ import {
   X,
 } from "lucide-react";
 import {
-  ChatResponse,
-  DocumentRecord,
-  EmbeddingModelOption,
-  KnowledgeBase,
+  type ChatResponse,
+  type DocumentRecord,
+  type EmbeddingModelOption,
+  type KnowledgeBase,
   createKnowledgeBase,
   listEmbeddingModels,
   listDocuments,
   listKnowledgeBases,
   sendChat,
-  uploadDocument,
 } from "../lib/api";
+import { ChunkingPolicyFields } from "../components/ChunkingPolicyFields";
+import { FancySelect } from "../components/FancySelect";
+import {
+  buildChunkingPolicyFromForm,
+  type ChunkingPolicyInput,
+} from "../lib/chunkingPolicy";
+import { DocumentIngestionWizard } from "../features/documentIngestion/DocumentIngestionWizard";
 
 type ChatTurn = {
   role: "user" | "assistant";
@@ -73,6 +78,7 @@ export function App() {
   const [isPanelOpen, setIsPanelOpen] = useState(true);
   const [panelTab, setPanelTab] = useState<PanelTab>("kb");
   const [isDragging, setIsDragging] = useState(false);
+  const [pendingIngestionFile, setPendingIngestionFile] = useState<File | null>(null);
   const [embeddingModels, setEmbeddingModels] = useState<EmbeddingModelOption[]>([]);
   const [selectedEmbeddingModel, setSelectedEmbeddingModel] = useState(DEFAULT_EMBEDDING_MODEL);
 
@@ -107,11 +113,13 @@ export function App() {
   useEffect(() => {
     if (!activeKbId) return;
     const activePolicy = knowledgeBases.find((item) => item.id === activeKbId)?.ingestion_policy;
-    if (activePolicy?.embedding?.model) setSelectedEmbeddingModel(activePolicy.embedding.model);
+    setSelectedEmbeddingModel(
+      activePolicy?.embedding?.model ?? embeddingModels[0]?.id ?? DEFAULT_EMBEDDING_MODEL,
+    );
     listDocuments(activeKbId)
       .then(setDocuments)
       .catch((e: unknown) => setStatus(e instanceof Error ? e.message : "加载失败"));
-  }, [activeKbId, knowledgeBases]);
+  }, [activeKbId, knowledgeBases, embeddingModels]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -127,48 +135,50 @@ export function App() {
     el.style.height = Math.min(el.scrollHeight, 150) + "px";
   }
 
-  async function handleFileUpload(file: File) {
+  function startDocumentIngestion(file: File) {
     if (!file || !activeKbId) return;
-    setBusy(true);
-    try {
-      const doc = await uploadDocument(activeKbId, file, "auto", selectedEmbeddingModel);
-      setDocuments((prev) => [doc, ...prev]);
-      setKnowledgeBases((prev) =>
-        prev.map((kb) =>
-          kb.id === activeKbId
-            ? {
-                ...kb,
-                ingestion_policy: {
-                  ...kb.ingestion_policy,
-                  embedding: { model: selectedEmbeddingModel },
-                },
-              }
-            : kb,
-        ),
-      );
-      openPanel("docs");
-    } finally {
-      setBusy(false);
-    }
+    setPendingIngestionFile(file);
+    openPanel("docs");
   }
 
-  async function onUpload(event: ChangeEvent<HTMLInputElement>) {
+  function onUpload(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
-    if (file) await handleFileUpload(file);
+    if (file) startDocumentIngestion(file);
     event.target.value = "";
   }
 
-  async function onDrop(event: ReactDragEvent<HTMLElement>) {
+  function onDrop(event: ReactDragEvent<HTMLElement>) {
     event.preventDefault();
     setIsDragging(false);
     const file = event.dataTransfer?.files[0];
-    if (file) await handleFileUpload(file);
+    if (file) startDocumentIngestion(file);
+  }
+
+  function onDocumentSaved(
+    document: DocumentRecord,
+    chunkingPolicy: ChunkingPolicyInput,
+    embeddingModel: string,
+  ) {
+    setDocuments((prev) => [document, ...prev]);
+    setKnowledgeBases((prev) =>
+      prev.map((kb) =>
+        kb.id === activeKbId
+          ? {
+              ...kb,
+              ingestion_policy: {
+                ...kb.ingestion_policy,
+                embedding: { model: embeddingModel },
+                chunker: chunkingPolicy,
+              },
+            }
+          : kb,
+      ),
+    );
   }
 
   async function onCreateKb(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
-    const strategy = String(data.get("strategy") || "semantic_hybrid");
     const embeddingModel = String(data.get("embedding_model") || selectedEmbeddingModel);
     const kb = await createKnowledgeBase({
       name: String(data.get("name") || ""),
@@ -176,7 +186,7 @@ export function App() {
       visibility: "private",
       ingestion_policy: {
         embedding: { model: embeddingModel },
-        chunker: { strategy },
+        chunker: buildChunkingPolicyFromForm(data),
       },
     });
     event.currentTarget.reset();
@@ -237,20 +247,12 @@ export function App() {
     { id: "governance", label: "治理", icon: <ShieldCheck size={14} /> },
   ];
 
-  const embeddingSelect = (
-    <select
-      aria-label="Embedding 模型"
-      className="embedding-select"
-      onChange={(event) => setSelectedEmbeddingModel(event.target.value)}
-      value={selectedEmbeddingModel}
-    >
-      {embeddingModels.map((model) => (
-        <option disabled={!model.enabled} key={model.id} value={model.id}>
-          {model.label} · {model.dimensions}d{model.enabled ? "" : ` · ${model.reason}`}
-        </option>
-      ))}
-    </select>
-  );
+  const embeddingSelectOptions = embeddingModels.map((model) => ({
+    value: model.id,
+    label: model.label,
+    disabled: !model.enabled,
+    hint: `${model.dimensions}d${model.enabled ? "" : ` · ${model.reason}`}`,
+  }));
 
   // ── KB tab ────────────────────────────────────────────────────
 
@@ -290,21 +292,14 @@ export function App() {
       <form className="create-kb-form" onSubmit={onCreateKb}>
         <input aria-label="知识库名称" name="name" placeholder="知识库名称" required />
         <input aria-label="知识库描述" name="description" placeholder="描述（选填）" />
-        <select name="strategy" aria-label="分块策略" defaultValue="semantic_hybrid">
-          <option value="semantic_hybrid">语义混合 (Semantic Hybrid)</option>
-          <option value="semantic">语义拆分 (Semantic)</option>
-          <option value="sentence">句子拆分 (Sentence)</option>
-          <option value="sentence_window">句子滑动窗口 (Sentence Window)</option>
-          <option value="token">Token拆分 (Token)</option>
-          <option value="recursive_text">递归文本拆分 (Recursive Text)</option>
-        </select>
-        <select name="embedding_model" aria-label="Embedding 模型" defaultValue={selectedEmbeddingModel}>
-          {embeddingModels.map((model) => (
-            <option disabled={!model.enabled} key={model.id} value={model.id}>
-              {model.label} · {model.dimensions}d{model.enabled ? "" : ` · ${model.reason}`}
-            </option>
-          ))}
-        </select>
+        <ChunkingPolicyFields />
+        <FancySelect
+          className="create-kb-model-select"
+          onChange={setSelectedEmbeddingModel}
+          options={embeddingSelectOptions}
+          value={selectedEmbeddingModel}
+        />
+        <input name="embedding_model" type="hidden" value={selectedEmbeddingModel} />
         <button className="btn-primary" type="submit">
           <Plus size={14} />
           创建
@@ -316,50 +311,18 @@ export function App() {
   // ── Docs tab ──────────────────────────────────────────────────
 
   const docsPanel = (
-    <div className="panel-section">
-      <div className="panel-docs-head">
-        <span className="panel-section-label" style={{ marginBottom: 0 }}>
-          {activeKb?.name ?? "文档列表"}
-        </span>
-        <label className="panel-upload-btn">
-          {busy ? <Loader2 className="spin" size={13} /> : <FileUp size={13} />}
-          上传
-          <input type="file" onChange={onUpload} />
-        </label>
-      </div>
-      <div className="upload-model-row">
-        <Activity size={13} />
-        {embeddingSelect}
-      </div>
-
-      {documents.length === 0 ? (
-        <div className="panel-empty">
-          <FileText size={20} />
-          <span>暂无文档</span>
-        </div>
-      ) : (
-        <div className="doc-list">
-          {documents.map((doc) => (
-            <div className="doc-item" key={doc.id}>
-              <div className="doc-item-icon">
-                <FileText size={13} />
-              </div>
-              <div className="doc-item-info">
-                <span className="doc-item-name">{doc.filename}</span>
-                <span className="doc-item-meta">
-                  {doc.parser} ·{" "}
-                  {new Date(doc.created_at).toLocaleDateString("zh-CN", {
-                    month: "short",
-                    day: "numeric",
-                  })}
-                </span>
-              </div>
-              <span className={`badge ${doc.status}`}>{doc.status}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
+    <DocumentIngestionWizard
+      activeKb={activeKb}
+      activeKbId={activeKbId}
+      documents={documents}
+      embeddingModel={selectedEmbeddingModel}
+      embeddingOptions={embeddingSelectOptions}
+      initialFile={pendingIngestionFile}
+      onEmbeddingModelChange={setSelectedEmbeddingModel}
+      onInitialFileConsumed={() => setPendingIngestionFile(null)}
+      onNeedKnowledgeBase={() => setPanelTab("kb")}
+      onSaved={onDocumentSaved}
+    />
   );
 
   // ── Governance tab ────────────────────────────────────────────
@@ -445,21 +408,17 @@ export function App() {
           <span>{documents.length}</span>
         </button>
 
-        <select
-          aria-label="上传使用的 Embedding 模型"
+        <FancySelect
+          buttonClassName="header-model-trigger"
           className="header-model-select"
-          onChange={(event) => setSelectedEmbeddingModel(event.target.value)}
+          menuClassName="header-model-menu"
+          onChange={setSelectedEmbeddingModel}
+          options={embeddingSelectOptions}
           value={selectedEmbeddingModel}
-        >
-          {embeddingModels.map((model) => (
-            <option disabled={!model.enabled} key={model.id} value={model.id}>
-              {model.label}
-            </option>
-          ))}
-        </select>
+        />
 
         <label className="header-upload-btn" title="上传文档到当前知识库">
-          {busy ? <Loader2 className="spin" size={14} /> : <FileUp size={14} />}
+          <FileUp size={14} />
           <span>上传</span>
           <input type="file" onChange={onUpload} />
         </label>
@@ -473,7 +432,11 @@ export function App() {
       {/* ── App Body ───────────────────────────────────────────── */}
       <div className="app-body">
         {/* ── Side Panel ─────────────────────────────────────── */}
-        <aside className={`side-panel ${isPanelOpen ? "open" : ""}`}>
+        <aside
+          className={`side-panel ${isPanelOpen ? "open" : ""} ${
+            panelTab === "docs" ? "docs-panel" : ""
+          }`}
+        >
           <div className="panel-header">
             <div className="panel-tabs">
               {panelTabs.map((tab) => (
