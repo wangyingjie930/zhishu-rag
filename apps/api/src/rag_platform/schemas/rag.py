@@ -17,11 +17,19 @@ class KnowledgeBaseOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class RetrievalPolicyCreate(BaseModel):
+    top_k: int = Field(default=8, ge=1, le=30)
+    vector_weight: float = Field(default=0.65, ge=0, le=1)
+    keyword_weight: float = Field(default=0.35, ge=0, le=1)
+    reranker: str = "none"
+    score_threshold: float = Field(default=0, ge=0, le=1)
+
+
 class KnowledgeBaseCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     description: str = ""
     visibility: str = "private"
-    ingestion_policy: Dict[str, Any] = Field(default_factory=dict)
+    retrieval_policy: Optional[RetrievalPolicyCreate] = None
 
 
 class DocumentOut(BaseModel):
@@ -57,6 +65,12 @@ class DocumentChunkPreviewOut(BaseModel):
     truncated: bool = False
 
 
+class DocumentReindexRequest(BaseModel):
+    parser: str = "auto"
+    embedding_model: str = ""
+    chunking_policy: Dict[str, Any] = Field(default_factory=dict)
+
+
 class Citation(BaseModel):
     chunk_id: uuid.UUID
     document_id: uuid.UUID
@@ -71,6 +85,8 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1)
     session_id: Optional[uuid.UUID] = None
     top_k: int = Field(default=8, ge=1, le=30)
+    hyde_enabled: bool = False
+    query_expansion_enabled: bool = False
 
 
 class ChatResponse(BaseModel):

@@ -1,5 +1,6 @@
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS pg_search;
 
 CREATE TABLE IF NOT EXISTS tenants (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -26,12 +27,12 @@ CREATE TABLE IF NOT EXISTS knowledge_bases (
   description text NOT NULL DEFAULT '',
   visibility text NOT NULL DEFAULT 'private',
   retrieval_policy jsonb NOT NULL DEFAULT '{"top_k": 8, "vector_weight": 0.65, "keyword_weight": 0.35, "reranker": "none"}',
-  ingestion_policy jsonb NOT NULL DEFAULT '{"parser": "auto", "preprocessor": "default", "embedding": {"model": "google:gemini-embedding-001"}, "chunker": {"strategy": "adaptive", "language": "zh", "chunk_size": 900, "chunk_overlap": 135, "overlap_ratio": 0.15, "window_size": 2, "max_chunk_size": 1200, "semantic_buffer_size": 1, "semantic_threshold": 95}}',
+  ingestion_policy jsonb NOT NULL DEFAULT '{"parser": "auto", "preprocessor": "default", "embedding": {}, "chunker": {"strategy": "adaptive", "language": "zh", "chunk_size": 900, "chunk_overlap": 135, "overlap_ratio": 0.15, "window_size": 2, "max_chunk_size": 1200, "semantic_buffer_size": 1, "semantic_threshold": 95}}',
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
 ALTER TABLE knowledge_bases
-  ADD COLUMN IF NOT EXISTS ingestion_policy jsonb NOT NULL DEFAULT '{"parser": "auto", "preprocessor": "default", "embedding": {"model": "google:gemini-embedding-001"}, "chunker": {"strategy": "adaptive", "language": "zh", "chunk_size": 900, "chunk_overlap": 135, "overlap_ratio": 0.15, "window_size": 2, "max_chunk_size": 1200, "semantic_buffer_size": 1, "semantic_threshold": 95}}';
+  ADD COLUMN IF NOT EXISTS ingestion_policy jsonb NOT NULL DEFAULT '{"parser": "auto", "preprocessor": "default", "embedding": {}, "chunker": {"strategy": "adaptive", "language": "zh", "chunk_size": 900, "chunk_overlap": 135, "overlap_ratio": 0.15, "window_size": 2, "max_chunk_size": 1200, "semantic_buffer_size": 1, "semantic_threshold": 95}}';
 
 CREATE TABLE IF NOT EXISTS documents (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -59,19 +60,26 @@ CREATE TABLE IF NOT EXISTS document_chunks (
   token_count integer NOT NULL DEFAULT 0,
   metadata jsonb NOT NULL DEFAULT '{}',
   embedding vector(1536),
-  search_vector tsvector GENERATED ALWAYS AS (
-    setweight(to_tsvector('simple', coalesce(content, '')), 'A')
-  ) STORED,
   created_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (document_id, chunk_index)
 );
+
+DROP INDEX IF EXISTS idx_document_chunks_search;
+DROP INDEX IF EXISTS idx_document_chunks_bm25;
+
+ALTER TABLE document_chunks
+  DROP COLUMN IF EXISTS search_vector;
+
+DROP TEXT SEARCH CONFIGURATION IF EXISTS public.zhcfg;
 
 CREATE INDEX IF NOT EXISTS idx_document_chunks_embedding
   ON document_chunks USING hnsw (embedding vector_cosine_ops)
   WITH (m = 16, ef_construction = 64);
 
-CREATE INDEX IF NOT EXISTS idx_document_chunks_search
-  ON document_chunks USING gin (search_vector);
+-- BM25 负责精确词项召回；tenant/kb/document 进入索引以便权限过滤能尽量下推。
+CREATE INDEX IF NOT EXISTS idx_document_chunks_bm25
+  ON document_chunks USING bm25 (id, (content::pdb.jieba), tenant_id, kb_id, document_id)
+  WITH (key_field = 'id');
 
 CREATE INDEX IF NOT EXISTS idx_document_chunks_scope
   ON document_chunks (tenant_id, kb_id, document_id);
@@ -115,6 +123,64 @@ CREATE TABLE IF NOT EXISTS feedback (
   reason text NOT NULL DEFAULT '',
   created_at timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS eval_datasets (
+  id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  kb_id uuid NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+  name text NOT NULL,
+  description text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS eval_samples (
+  id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  dataset_id uuid NOT NULL REFERENCES eval_datasets(id) ON DELETE CASCADE,
+  source_message_id uuid REFERENCES chat_messages(id) ON DELETE SET NULL,
+  user_input text NOT NULL,
+  reference text NOT NULL DEFAULT '',
+  expected_context_ids jsonb NOT NULL DEFAULT '[]',
+  tags jsonb NOT NULL DEFAULT '[]',
+  original_response text NOT NULL DEFAULT '',
+  original_citations jsonb NOT NULL DEFAULT '[]',
+  original_retrieval_trace jsonb NOT NULL DEFAULT '{}',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS eval_runs (
+  id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  dataset_id uuid NOT NULL REFERENCES eval_datasets(id) ON DELETE CASCADE,
+  kb_id uuid NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+  status text NOT NULL DEFAULT 'pending',
+  metrics jsonb NOT NULL DEFAULT '{}',
+  config jsonb NOT NULL DEFAULT '{}',
+  error_message text NOT NULL DEFAULT '',
+  completed_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS eval_run_results (
+  id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  run_id uuid NOT NULL REFERENCES eval_runs(id) ON DELETE CASCADE,
+  sample_id uuid NOT NULL REFERENCES eval_samples(id) ON DELETE CASCADE,
+  user_input text NOT NULL,
+  response text NOT NULL DEFAULT '',
+  reference text NOT NULL DEFAULT '',
+  retrieved_contexts jsonb NOT NULL DEFAULT '[]',
+  citations jsonb NOT NULL DEFAULT '[]',
+  retrieval_trace jsonb NOT NULL DEFAULT '{}',
+  metrics jsonb NOT NULL DEFAULT '{}',
+  reasons jsonb NOT NULL DEFAULT '{}',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_eval_datasets_scope ON eval_datasets (tenant_id, kb_id);
+CREATE INDEX IF NOT EXISTS idx_eval_samples_dataset ON eval_samples (tenant_id, dataset_id);
+CREATE INDEX IF NOT EXISTS idx_eval_runs_dataset ON eval_runs (tenant_id, dataset_id);
+CREATE INDEX IF NOT EXISTS idx_eval_run_results_run ON eval_run_results (tenant_id, run_id);
 
 INSERT INTO tenants (id, name, slug)
 VALUES ('00000000-0000-0000-0000-000000000001', 'Demo Enterprise', 'demo')

@@ -3,6 +3,8 @@ import {
   type DocumentChunkPreview,
   type DocumentRecord,
   previewDocumentChunks,
+  previewDocumentReindex,
+  reindexDocument,
   uploadDocument,
 } from "../../lib/api";
 import {
@@ -21,6 +23,7 @@ type UseDocumentIngestionWizardOptions = {
   embeddingModel: string;
   initialFile: File | null;
   onInitialFileConsumed: () => void;
+  onDocumentParametersReset: () => void;
   onSaved: SaveHandler;
 };
 
@@ -31,10 +34,12 @@ export function useDocumentIngestionWizard({
   embeddingModel,
   initialFile,
   onInitialFileConsumed,
+  onDocumentParametersReset,
   onSaved,
 }: UseDocumentIngestionWizardOptions) {
   const [step, setStep] = useState<IngestionStep>("source");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [reindexingDocument, setReindexingDocument] = useState<DocumentRecord | null>(null);
   const [parser, setParser] = useState("auto");
   const [chunkingPolicy, setChunkingPolicy] =
     useState<ChunkingPolicyInput>(DEFAULT_CHUNKING_POLICY);
@@ -49,26 +54,34 @@ export function useDocumentIngestionWizard({
     setStep("source");
     setPreview(null);
     setError("");
+    resetDocumentParameters();
     onInitialFileConsumed();
   }, [initialFile, onInitialFileConsumed]);
 
   const canPreview = useMemo(
-    () => Boolean(activeKbId && selectedFile && !previewing && !saving),
-    [activeKbId, selectedFile, previewing, saving],
+    () => Boolean(activeKbId && (selectedFile || reindexingDocument) && !previewing && !saving),
+    [activeKbId, selectedFile, reindexingDocument, previewing, saving],
   );
 
   async function previewChunks() {
-    if (!activeKbId || !selectedFile) return;
+    if (!activeKbId || (!selectedFile && !reindexingDocument)) return;
     setPreviewing(true);
     setError("");
     try {
-      const result = await previewDocumentChunks(
-        activeKbId,
-        selectedFile,
-        parser,
-        embeddingModel,
-        chunkingPolicy,
-      );
+      const result = reindexingDocument
+        ? await previewDocumentReindex(
+            reindexingDocument.id,
+            parser,
+            embeddingModel,
+            chunkingPolicy,
+          )
+        : await previewDocumentChunks(
+            activeKbId,
+            selectedFile as File,
+            parser,
+            embeddingModel,
+            chunkingPolicy,
+          );
       setPreview(result);
     } catch (reason: unknown) {
       setPreview(null);
@@ -79,19 +92,21 @@ export function useDocumentIngestionWizard({
   }
 
   async function saveDocument() {
-    if (!activeKbId || !selectedFile) return;
+    if (!activeKbId || (!selectedFile && !reindexingDocument)) return;
     setSaving(true);
     setError("");
     try {
-      const document = await uploadDocument(
-        activeKbId,
-        selectedFile,
-        parser,
-        embeddingModel,
-        chunkingPolicy,
-      );
+      const document = reindexingDocument
+        ? await reindexDocument(reindexingDocument.id, parser, embeddingModel, chunkingPolicy)
+        : await uploadDocument(
+            activeKbId,
+            selectedFile as File,
+            parser,
+            embeddingModel,
+            chunkingPolicy,
+          );
       onSaved(document, chunkingPolicy, embeddingModel);
-      resetWizard();
+      resetWizard({ resetParameters: true });
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : "保存失败");
     } finally {
@@ -101,8 +116,20 @@ export function useDocumentIngestionWizard({
 
   function chooseFile(file: File | null) {
     setSelectedFile(file);
+    setReindexingDocument(null);
     setPreview(null);
     setError("");
+    resetDocumentParameters();
+  }
+
+  function chooseDocumentForReindex(document: DocumentRecord, policy: ChunkingPolicyInput) {
+    setSelectedFile(null);
+    setReindexingDocument(document);
+    setParser(document.parser || "auto");
+    setChunkingPolicy(policy);
+    setPreview(null);
+    setError("");
+    setStep("processing");
   }
 
   function goToProcessing() {
@@ -110,16 +137,26 @@ export function useDocumentIngestionWizard({
     setStep("processing");
   }
 
-  function resetWizard() {
+  function resetDocumentParameters() {
+    // 每个文档的导入参数独立生效，换文件或保存后回到默认配置，避免误沿用上一份文档。
+    setParser("auto");
+    setChunkingPolicy(DEFAULT_CHUNKING_POLICY);
+    onDocumentParametersReset();
+  }
+
+  function resetWizard(options: { resetParameters?: boolean } = {}) {
     setStep("source");
     setSelectedFile(null);
+    setReindexingDocument(null);
     setPreview(null);
     setError("");
+    if (options.resetParameters) resetDocumentParameters();
   }
 
   return {
     canPreview,
     chooseFile,
+    chooseDocumentForReindex,
     chunkingPolicy,
     error,
     goToProcessing,
@@ -131,7 +168,9 @@ export function useDocumentIngestionWizard({
     saveDocument,
     saving,
     selectedFile,
+    reindexingDocument,
     setChunkingPolicy,
+    setError,
     setParser,
     setStep,
     step,

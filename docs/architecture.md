@@ -20,8 +20,8 @@
 - 知识库和权限：知识库独立配置检索策略，文档和 chunk 都在 tenant/kb 范围内过滤。
 - 文档治理：保留 `metadata`、`checksum`、`status`、`parser`、错误信息，方便去重、回滚和重建索引。
 - 异步化：当前演示同步入库，`workers` 目录预留 Celery/Arq/Temporal，用于大文件、OCR、批量重建。
-- 混合检索：pgvector 做向量相似度，Postgres `tsvector` + GIN 做关键词召回，RRF 融合。
-- 可替换 BM25：如果需要严格 BM25 排名，可用 ParadeDB/pg_search 或 OpenSearch 替换 lexical retriever，API 和数据契约不变。
+- 混合检索：pgvector 做向量相似度，ParadeDB/pg_search BM25 做关键词召回，RRF 融合。
+- 可替换 lexical retriever：如果后续要外置搜索引擎，可用 OpenSearch 替换 BM25 层，API 和数据契约不变。
 - 可观测性：`retrieval_trace` 记录召回数量、融合策略、重排策略，便于调优和排障。
 - 反馈闭环：`feedback` 表用于收集答案质量，后续驱动评测集、提示词优化和索引策略调参。
 - 审计合规：`audit_logs` 表用于记录上传、删除、权限变更、问答访问等行为。
@@ -51,5 +51,5 @@
 - 接入对象存储 SDK，并把本地 `uploads` 替换为 MinIO/S3。
 - 增加 Alembic 迁移和 CI。
 - 为检索质量建立 golden set，持续评估 recall、MRR、faithfulness。
-- 增加删除文档、重建索引、知识库成员管理和 API key 管理。
-
+- 把索引重建改成后台任务，增加进度、取消和重试。
+- 增加知识库成员管理和 API key 管理。

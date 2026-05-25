@@ -108,6 +108,77 @@ class ChatMessage(Base, TimestampMixin):
     retrieval_trace: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
 
 
+class EvalDataset(Base, TimestampMixin):
+    __tablename__ = "eval_datasets"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"))
+    kb_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("knowledge_bases.id"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+
+class EvalSample(Base, TimestampMixin):
+    __tablename__ = "eval_samples"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"))
+    dataset_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("eval_datasets.id", ondelete="CASCADE")
+    )
+    source_message_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chat_messages.id", ondelete="SET NULL"), nullable=True
+    )
+    user_input: Mapped[str] = mapped_column(Text, nullable=False)
+    reference: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    expected_context_ids: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    tags: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    original_response: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    original_citations: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    original_retrieval_trace: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+
+class EvalRun(Base, TimestampMixin):
+    __tablename__ = "eval_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"))
+    dataset_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("eval_datasets.id", ondelete="CASCADE")
+    )
+    kb_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("knowledge_bases.id", ondelete="CASCADE")
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    metrics: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    config: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    error_message: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class EvalRunResult(Base, TimestampMixin):
+    __tablename__ = "eval_run_results"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"))
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("eval_runs.id", ondelete="CASCADE")
+    )
+    sample_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("eval_samples.id", ondelete="CASCADE")
+    )
+    user_input: Mapped[str] = mapped_column(Text, nullable=False)
+    response: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    reference: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    retrieved_contexts: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    citations: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    retrieval_trace: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    metrics: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    reasons: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+
 class AuditLog(Base, TimestampMixin):
     __tablename__ = "audit_logs"
 

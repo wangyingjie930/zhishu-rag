@@ -1,5 +1,6 @@
 import re
 from dataclasses import dataclass, field, replace
+from io import BytesIO
 from typing import Any, Dict, Iterable, List, Optional, Protocol, Union
 
 from llama_index.core import Document as LlamaDocument
@@ -7,6 +8,7 @@ from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.core.node_parser import (
     SemanticSplitterNodeParser,
     SentenceSplitter,
+    SentenceWindowNodeParser,
     TokenTextSplitter,
 )
 from llama_index.core.utils import get_tokenizer
@@ -24,14 +26,78 @@ class TextParser:
         return payload.decode("utf-8", errors="ignore")
 
 
+class PdfParser:
+    def parse(self, filename: str, payload: bytes) -> str:
+        try:
+            pages = self._extract_with_pdfium(payload)
+        except Exception:
+            pages = []
+        if not pages:
+            pages = self._extract_with_pypdf(payload)
+
+        if not pages:
+            raise ValueError(
+                "未能从 PDF 中提取文本，扫描件或图片型 PDF 需要先接入 OCR。"
+            )
+        return "\n\n".join(
+            f"PDF 第 {index} 页\n{page_text}"
+            for index, page_text in enumerate(pages, start=1)
+            if page_text
+        )
+
+    def _extract_with_pdfium(self, payload: bytes) -> List[str]:
+        try:
+            import pypdfium2 as pdfium
+        except ImportError:
+            return []
+
+        pages: List[str] = []
+        pdf = pdfium.PdfDocument(payload)
+        try:
+            for page in pdf:
+                try:
+                    textpage = page.get_textpage()
+                    try:
+                        page_text = textpage.get_text_range()
+                    finally:
+                        textpage.close()
+                    page_text = normalize_pdf_page_text(page_text or "")
+                    if page_text:
+                        pages.append(page_text)
+                finally:
+                    page.close()
+        finally:
+            pdf.close()
+        return pages
+
+    def _extract_with_pypdf(self, payload: bytes) -> List[str]:
+        try:
+            from pypdf import PdfReader
+        except ImportError as exc:  # pragma: no cover - environment guard
+            raise RuntimeError(
+                "PDF 解析依赖 pypdfium2 或 pypdf，"
+                "请在 API 环境安装其中一个依赖后重试。"
+            ) from exc
+
+        reader = PdfReader(BytesIO(payload), strict=False)
+        pages: List[str] = []
+        for page in reader.pages:
+            page_text = normalize_pdf_page_text(page.extract_text() or "")
+            if page_text:
+                pages.append(page_text)
+        return pages
+
+
 class AutoParser:
     def parse(self, filename: str, payload: bytes) -> str:
         suffix = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
         if suffix in {"txt", "md", "markdown", "csv", "json", "log"}:
             return TextParser().parse(filename, payload)
+        if suffix == "pdf":
+            return PdfParser().parse(filename, payload)
         return (
             "该文件类型已上传，但当前演示解析器只内置文本类解析。"
-            "生产环境可在 ParserRegistry 中接入 PDF、Office、HTML、OCR、邮件和图片解析器。"
+            "生产环境可在 ParserRegistry 中继续接入 Office、HTML、OCR、邮件和图片解析器。"
         )
 
 
@@ -46,6 +112,33 @@ class DefaultPreprocessor:
         text = re.sub(r"[ \t]+", " ", text)
         text = re.sub(r"\n{3,}", "\n\n", text)
         return text.strip()
+
+
+_CJK_CHARS = "\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff"
+_CJK_SOFT_BREAK_LEFT = f"{_CJK_CHARS}，、；：）】》”’"
+_CJK_SOFT_BREAK_RIGHT = f"{_CJK_CHARS}（【《“‘"
+
+
+def normalize_pdf_page_text(text: str) -> str:
+    """修复 PDF 抽取时常见的版式换行，避免把软换行误当句子边界。"""
+
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"(?m)^\s*\d+\s*/\s*\d+\s*$", "", text)
+    text = re.sub(r"(?m)^\s*PDF\s*第\s*\d+\s*页\s*$", "", text)
+    text = re.sub(r"([A-Za-z])-\n([A-Za-z])", r"\1\2", text)
+    text = re.sub(r"(?m)^([^\n。！？.!?]{2,24})\n\1(?=[^\n])", r"\1\n", text)
+    text = re.sub(
+        rf"([{_CJK_SOFT_BREAK_LEFT}])\n([{_CJK_SOFT_BREAK_RIGHT}])",
+        r"\1\2",
+        text,
+    )
+    text = re.sub(
+        rf"(?m)(^|\n)([{_CJK_CHARS}A-Za-z][{_CJK_CHARS}A-Za-z /-]{{1,16}})\2(?=[{_CJK_CHARS}（(])",
+        r"\1\2",
+        text,
+    )
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 @dataclass(frozen=True)
@@ -142,14 +235,14 @@ def default_ingestion_policy() -> Dict[str, Any]:
 def chinese_sentence_tokenizer(text: str) -> List[str]:
     """供 LlamaIndex 语义/窗口解析器使用的中文感知句子拆分器。"""
 
-    sentences = re.findall(r"[^。！？…\n]+[。！？…\n]?", text)
+    sentences = re.findall(r".+?(?:[。！？…]+|(?:\n\s*){2,}|$)", text, flags=re.S)
     return [sentence.strip() for sentence in sentences if sentence.strip()]
 
 
 def sentence_tokenizer_for_preview(text: str, language: str) -> List[str]:
     if language.lower().startswith("zh"):
         return chinese_sentence_tokenizer(text)
-    sentences = re.findall(r"[^.!?\n]+[.!?\n]?", text)
+    sentences = re.findall(r".+?(?:[.!?]+|(?:\n\s*){2,}|$)", text, flags=re.S)
     return [sentence.strip() for sentence in sentences if sentence.strip()]
 
 
@@ -355,9 +448,19 @@ class SentenceWindowChunker:
     def __init__(self, policy: ChunkingPolicy) -> None:
         self.policy = policy
         self.tokenizer = get_tokenizer()
+        self.sentence_parser = SentenceWindowNodeParser.from_defaults(
+            sentence_splitter=lambda text: sentence_tokenizer_for_preview(
+                text,
+                self.policy.language,
+            ),
+            window_size=policy.window_size,
+            window_metadata_key="sentence_window_context",
+            original_text_metadata_key="sentence_original_text",
+        )
 
     def split(self, text: str) -> Iterable[Chunk]:
-        sentences = sentence_tokenizer_for_preview(text, self.policy.language)
+        nodes = self.sentence_parser.get_nodes_from_documents([LlamaDocument(text=text)])
+        sentences = [node.text.strip() for node in nodes if node.text.strip()]
         if not sentences:
             return
 
@@ -590,6 +693,7 @@ class ParserRegistry:
     def __init__(self) -> None:
         self._parsers = {
             "auto": AutoParser(),
+            "pdf": PdfParser(),
             "text": TextParser(),
         }
 

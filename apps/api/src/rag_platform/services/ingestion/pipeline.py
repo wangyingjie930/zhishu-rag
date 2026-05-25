@@ -15,6 +15,7 @@ from rag_platform.services.ingestion.embeddings import (
     DEFAULT_EMBEDDING_MODEL_ID,
     EmbeddingProvider,
     EmbeddingProviderRegistry,
+    resolve_embedding_model_id,
 )
 from rag_platform.services.ingestion.strategies import (
     ChunkerRegistry,
@@ -25,8 +26,6 @@ from rag_platform.services.ingestion.strategies import (
     needs_semantic_embedding,
     resolve_chunking_policy,
 )
-
-
 MAX_PREVIEW_CHUNKS = 80
 
 
@@ -81,55 +80,22 @@ class IngestionPipeline:
                 kb_id,
                 embedding_model,
                 chunking_policy=chunking_policy,
-                persist_overrides=True,
             )
             embedding_model_id = ingestion_policy.get("embedding", {}).get(
                 "model",
                 DEFAULT_EMBEDDING_MODEL_ID,
             )
-            clean_text = self._parse_and_clean(filename, payload, parser)
-            chunking_policy = resolve_chunking_policy(
-                ingestion_policy,
-                filename=filename,
+            await self.index_document_payload(
+                session=session,
+                tenant_id=tenant_id,
+                kb_id=kb_id,
+                document=document,
+                payload=payload,
+                parser=parser,
                 mime_type=mime_type,
-                text=clean_text,
+                ingestion_policy=ingestion_policy,
+                checksum=checksum,
             )
-            # 保存本次入库实际生效的策略，方便后续审计与复现。
-            document.metadata_ = {
-                **document.metadata_,
-                "ingestion_policy": {
-                    "embedding": {"model": embedding_model_id},
-                    "chunker": chunking_policy.to_metadata(),
-                },
-            }
-            embedding_provider = self.embedding_provider or self.embedding_providers.get(
-                embedding_model_id,
-                usage="document",
-            )
-            chunks = await self._split_text(
-                clean_text=clean_text,
-                chunking_policy=chunking_policy,
-                embedding_model_id=embedding_model_id,
-            )
-            for chunk in chunks:
-                embedding = await embedding_provider.embed(chunk.content)
-                session.add(
-                    DocumentChunk(
-                        tenant_id=tenant_id,
-                        kb_id=kb_id,
-                        document_id=document.id,
-                        chunk_index=chunk.index,
-                        content=chunk.content,
-                        token_count=chunk.token_count,
-                        metadata_={
-                            "parser": parser,
-                            "checksum": checksum,
-                            "embedding": {"model": embedding_model_id},
-                            **chunk.metadata,
-                        },
-                        embedding=embedding,
-                    )
-                )
             document.status = DocumentStatus.indexed.value
             document.error_message = None
         except Exception as exc:  # pragma: no cover - defensive boundary
@@ -157,7 +123,6 @@ class IngestionPipeline:
             kb_id,
             embedding_model,
             chunking_policy=chunking_policy,
-            persist_overrides=False,
         )
         embedding_model_id = ingestion_policy.get("embedding", {}).get(
             "model",
@@ -196,6 +161,89 @@ class IngestionPipeline:
             ],
         }
 
+    async def index_existing_document(
+        self,
+        session: AsyncSession,
+        tenant_id: uuid.UUID,
+        document: Document,
+        ingestion_policy: Dict[str, Any],
+    ) -> int:
+        payload = Path(document.object_uri).read_bytes()
+        checksum = document.checksum or hashlib.sha256(payload).hexdigest()
+        return await self.index_document_payload(
+            session=session,
+            tenant_id=tenant_id,
+            kb_id=document.kb_id,
+            document=document,
+            payload=payload,
+            parser=document.parser,
+            mime_type=document.mime_type,
+            ingestion_policy=ingestion_policy,
+            checksum=checksum,
+        )
+
+    async def index_document_payload(
+        self,
+        session: AsyncSession,
+        tenant_id: uuid.UUID,
+        kb_id: uuid.UUID,
+        document: Document,
+        payload: bytes,
+        parser: str,
+        mime_type: str,
+        ingestion_policy: Dict[str, Any],
+        checksum: str,
+    ) -> int:
+        embedding_model_id = ingestion_policy.get("embedding", {}).get(
+            "model",
+            DEFAULT_EMBEDDING_MODEL_ID,
+        )
+        clean_text = self._parse_and_clean(document.filename, payload, parser)
+        chunking_policy = resolve_chunking_policy(
+            ingestion_policy,
+            filename=document.filename,
+            mime_type=mime_type,
+            text=clean_text,
+        )
+        # 保存每个文档最后一次生效的索引策略，方便问题回溯和版本重建。
+        document.metadata_ = {
+            **(document.metadata_ or {}),
+            "ingestion_policy": {
+                "embedding": {"model": embedding_model_id},
+                "chunker": chunking_policy.to_metadata(),
+            },
+        }
+
+        embedding_provider = self.embedding_provider or self.embedding_providers.get(
+            embedding_model_id,
+            usage="document",
+        )
+        chunks = await self._split_text(
+            clean_text=clean_text,
+            chunking_policy=chunking_policy,
+            embedding_model_id=embedding_model_id,
+        )
+        for chunk in chunks:
+            embedding = await embedding_provider.embed(chunk.content)
+            session.add(
+                DocumentChunk(
+                    tenant_id=tenant_id,
+                    kb_id=kb_id,
+                    document_id=document.id,
+                    chunk_index=chunk.index,
+                    content=chunk.content,
+                    token_count=chunk.token_count,
+                    metadata_={
+                        "parser": parser,
+                        "checksum": checksum,
+                        "embedding": {"model": embedding_model_id},
+                        **chunk.metadata,
+                    },
+                    embedding=embedding,
+                )
+            )
+        return len(chunks)
+
     def _parse_and_clean(self, filename: str, payload: bytes, parser: str) -> str:
         raw_text = self.parsers.get(parser).parse(filename, payload)
         return self.preprocessor.clean(raw_text)
@@ -222,7 +270,6 @@ class IngestionPipeline:
         kb_id: uuid.UUID,
         embedding_model: Optional[str] = None,
         chunking_policy: Optional[Dict[str, Any]] = None,
-        persist_overrides: bool = False,
     ) -> dict:
         result = await session.execute(
             select(KnowledgeBase).where(
@@ -240,14 +287,12 @@ class IngestionPipeline:
         if embedding_model:
             # 上传、语义分块和检索必须保持在同一个真实 embedding 空间里。
             policy["embedding"]["model"] = embedding_model
+        policy["embedding"]["model"] = resolve_embedding_model_id(
+            policy["embedding"].get("model")
+        )
         if chunking_policy:
             policy.setdefault("chunker", {})
             policy["chunker"].update(chunking_policy.get("chunker", chunking_policy))
         policy["chunker"] = ChunkingPolicy.from_dict(policy).normalized().to_metadata()
-
-        if persist_overrides and kb is not None and (embedding_model or chunking_policy):
-            # 用户在导入向导提交的参数会固化到知识库，后续上传默认沿用同一套策略。
-            kb.ingestion_policy = policy
-            await session.flush()
 
         return policy

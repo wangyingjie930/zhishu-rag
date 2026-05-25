@@ -22,11 +22,32 @@ class Settings(BaseSettings):
     object_storage_bucket: str = "rag-documents"
     object_storage_access_key: str = "minio"
     object_storage_secret_key: str = "minio123"
-    embedding_model: str = "google:gemini-embedding-001"
-    embedding_dim: int = 1536
+    embedding_model: str = ""
+    embedding_base_url: str = ""
+    embedding_endpoint_path: str = ""
+    embedding_api_key: str = ""
+    embedding_dim: int = 0
     google_api_key: str = ""
-    llm_provider: str = "mock"
+    llm_provider: str = ""
+    llm_openai_base_url: str = ""
+    llm_model: str = ""
+    llm_api_key: str = ""
+    llm_max_output_tokens: int = 0
+    hyde_openai_base_url: str = ""
+    hyde_llm_model: str = ""
+    hyde_max_output_tokens: int = 0
     openai_api_key: str = ""
+    ragas_openai_api_key: str = ""
+    ragas_openai_base_url: str = ""
+    ragas_llm_model: str = ""
+    ragas_embedding_model: str = ""
+    langfuse_enabled: bool = False
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_host: str = ""
+    langfuse_base_url: str = ""
+    langfuse_environment: str = ""
+    langfuse_sample_rate: float = Field(default=1.0, ge=0, le=1)
     web_origin: str = "http://localhost:5173"
     upload_dir: Path = Field(default=Path("uploads"))
 

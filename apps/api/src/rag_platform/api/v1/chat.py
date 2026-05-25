@@ -24,5 +24,6 @@ async def chat(
         session_id=payload.session_id,
         message=payload.message,
         top_k=payload.top_k,
+        hyde_enabled=payload.hyde_enabled,
+        query_expansion_enabled=payload.query_expansion_enabled,
     )
-

@@ -8,11 +8,13 @@ import {
   RefreshCw,
   Scissors,
   Settings2,
+  Trash2,
   X,
 } from "lucide-react";
-import type { ChangeEvent } from "react";
+import { useState, type ChangeEvent } from "react";
 import { ChunkingPolicyFields } from "../../components/ChunkingPolicyFields";
 import { FancySelect } from "../../components/FancySelect";
+import { deleteDocument } from "../../lib/api";
 import type {
   ChunkPreviewItem,
   DocumentChunkPreview,
@@ -20,6 +22,10 @@ import type {
   KnowledgeBase,
 } from "../../lib/api";
 import type { ChunkingPolicyInput } from "../../lib/chunkingPolicy";
+import {
+  readChunkingPolicyFromDocumentMetadata,
+  readEmbeddingModelFromDocumentMetadata,
+} from "../../lib/ingestionPolicy";
 import { useDocumentIngestionWizard } from "./useDocumentIngestionWizard";
 
 type SelectOption = {
@@ -53,8 +59,10 @@ type DocumentIngestionWizardProps = {
   embeddingOptions: SelectOption[];
   initialFile: File | null;
   onEmbeddingModelChange: (model: string) => void;
+  onDocumentParametersReset: () => void;
   onInitialFileConsumed: () => void;
   onNeedKnowledgeBase: () => void;
+  onDeleted: (documentId: string) => void;
   onSaved: (
     document: DocumentRecord,
     chunkingPolicy: ChunkingPolicyInput,
@@ -63,9 +71,12 @@ type DocumentIngestionWizardProps = {
 };
 
 const PARSER_OPTIONS = [
-  { value: "auto", label: "自动解析", hint: "根据文件类型选择解析器" },
+  { value: "auto", label: "自动解析", hint: "根据文件类型选择解析器，支持 PDF 和文本" },
+  { value: "pdf", label: "PDF", hint: "抽取 PDF 页面文本用于分段预览" },
   { value: "text", label: "纯文本", hint: "适合 txt、md、csv、json" },
 ];
+
+const SUPPORTED_FILE_ACCEPT = ".pdf,.txt,.md,.markdown,.csv,.json,.log,text/*,application/pdf";
 
 export function DocumentIngestionWizard({
   activeKb,
@@ -75,21 +86,50 @@ export function DocumentIngestionWizard({
   embeddingOptions,
   initialFile,
   onEmbeddingModelChange,
+  onDocumentParametersReset,
   onInitialFileConsumed,
   onNeedKnowledgeBase,
+  onDeleted,
   onSaved,
 }: DocumentIngestionWizardProps) {
+  const [deletingDocumentId, setDeletingDocumentId] = useState("");
   const wizard = useDocumentIngestionWizard({
     activeKbId,
     embeddingModel,
     initialFile,
+    onDocumentParametersReset,
     onInitialFileConsumed,
     onSaved,
   });
+  const isReindexing = Boolean(wizard.reindexingDocument);
+  const selectedSourceName = wizard.selectedFile?.name ?? wizard.reindexingDocument?.filename ?? "";
 
   function onPickFile(event: ChangeEvent<HTMLInputElement>) {
     wizard.chooseFile(event.target.files?.[0] ?? null);
     event.target.value = "";
+  }
+
+  function onReindexDocument(document: DocumentRecord) {
+  const embeddingModelFromDocument = readDocumentEmbeddingModel(document);
+    if (embeddingModelFromDocument) onEmbeddingModelChange(embeddingModelFromDocument);
+    wizard.chooseDocumentForReindex(document, readDocumentChunkingPolicy(document));
+  }
+
+  async function onDeleteDocument(document: DocumentRecord) {
+    const confirmed = window.confirm(
+      `确定彻底删除文档「${document.filename}」吗？数据库中的文档记录和所有分块都会被删除。`,
+    );
+    if (!confirmed) return;
+
+    setDeletingDocumentId(document.id);
+    try {
+      await deleteDocument(document.id);
+      onDeleted(document.id);
+    } catch (reason: unknown) {
+      wizard.setError(reason instanceof Error ? reason.message : "删除失败");
+    } finally {
+      setDeletingDocumentId("");
+    }
   }
 
   if (!activeKbId) {
@@ -109,11 +149,11 @@ export function DocumentIngestionWizard({
     <div className="ingestion-wizard">
       <div className="ingestion-head">
         <div>
-          <p className="panel-section-label">文档导入</p>
-          <strong>{activeKb?.name ?? "当前知识库"}</strong>
+          <p className="panel-section-label">{isReindexing ? "文档重建" : "文档导入"}</p>
+          <strong>{isReindexing ? selectedSourceName : activeKb?.name ?? "当前知识库"}</strong>
         </div>
-        {wizard.selectedFile && (
-          <button className="icon-text-btn" onClick={wizard.resetWizard} type="button">
+        {(wizard.selectedFile || wizard.reindexingDocument) && (
+          <button className="icon-text-btn" onClick={() => wizard.resetWizard()} type="button">
             <X size={13} />
             重置
           </button>
@@ -133,7 +173,7 @@ export function DocumentIngestionWizard({
           label="分段清洗"
         />
         <MoveRight size={13} />
-        <StepPill active={false} done={false} label="保存" />
+        <StepPill active={false} done={false} label={isReindexing ? "重建" : "保存"} />
       </div>
 
       <div className="ingestion-workspace">
@@ -152,9 +192,9 @@ export function DocumentIngestionWizard({
                     ? `${formatFileSize(wizard.selectedFile.size)} · ${
                         wizard.selectedFile.type || "未知类型"
                       }`
-                    : "支持拖拽到页面或点击选择本地文件"}
+                    : "支持 PDF、TXT、Markdown、CSV、JSON，或拖拽到页面"}
                 </span>
-                <input type="file" onChange={onPickFile} />
+                <input accept={SUPPORTED_FILE_ACCEPT} type="file" onChange={onPickFile} />
               </label>
               <button
                 className="btn-primary"
@@ -174,8 +214,8 @@ export function DocumentIngestionWizard({
               </div>
               <div className="selected-source-row">
                 <FileText size={14} />
-                <span>{wizard.selectedFile?.name}</span>
-                <button onClick={() => wizard.setStep("source")} type="button">
+                <span>{selectedSourceName}</span>
+                <button onClick={() => wizard.resetWizard()} type="button">
                   更换
                 </button>
               </div>
@@ -221,7 +261,7 @@ export function DocumentIngestionWizard({
                 </button>
                 <button
                   className="btn-primary"
-                  disabled={!wizard.selectedFile || wizard.saving}
+                  disabled={!(wizard.selectedFile || wizard.reindexingDocument) || wizard.saving}
                   onClick={wizard.saveDocument}
                   type="button"
                 >
@@ -230,13 +270,18 @@ export function DocumentIngestionWizard({
                   ) : (
                     <CheckCircle2 size={14} />
                   )}
-                  保存
+                  {isReindexing ? "重建" : "保存"}
                 </button>
               </div>
             </section>
           )}
 
-          <RecentDocuments documents={documents} />
+          <RecentDocuments
+            deletingDocumentId={deletingDocumentId}
+            documents={documents}
+            onDelete={onDeleteDocument}
+            onReindex={onReindexDocument}
+          />
         </div>
 
         <aside className="ingestion-preview-pane">
@@ -349,7 +394,17 @@ function StepPill({ active, done, label }: { active: boolean; done: boolean; lab
   );
 }
 
-function RecentDocuments({ documents }: { documents: DocumentRecord[] }) {
+function RecentDocuments({
+  deletingDocumentId,
+  documents,
+  onDelete,
+  onReindex,
+}: {
+  deletingDocumentId: string;
+  documents: DocumentRecord[];
+  onDelete: (document: DocumentRecord) => void;
+  onReindex: (document: DocumentRecord) => void;
+}) {
   if (!documents.length) {
     return (
       <div className="panel-empty compact-empty">
@@ -379,6 +434,31 @@ function RecentDocuments({ documents }: { documents: DocumentRecord[] }) {
               </span>
             </div>
             <span className={`badge ${doc.status}`}>{doc.status}</span>
+            <div className="doc-actions">
+              <button
+                aria-label={`重建 ${doc.filename} 的索引`}
+                className="doc-reindex-btn"
+                onClick={() => onReindex(doc)}
+                title="重建文档索引"
+                type="button"
+              >
+                <RefreshCw size={13} />
+              </button>
+              <button
+                aria-label={`彻底删除 ${doc.filename}`}
+                className="doc-delete-btn"
+                disabled={deletingDocumentId === doc.id}
+                onClick={() => onDelete(doc)}
+                title="彻底删除文档"
+                type="button"
+              >
+                {deletingDocumentId === doc.id ? (
+                  <Loader2 className="spin" size={13} />
+                ) : (
+                  <Trash2 size={13} />
+                )}
+              </button>
+            </div>
           </div>
         ))}
       </div>
@@ -450,4 +530,12 @@ function readPreviewParent(metadata: Record<string, unknown>) {
 function readPreviewChildIndex(metadata: Record<string, unknown>) {
   const index = metadata.child_index;
   return typeof index === "number" ? index : 0;
+}
+
+function readDocumentChunkingPolicy(document: DocumentRecord): ChunkingPolicyInput {
+  return readChunkingPolicyFromDocumentMetadata(document.metadata);
+}
+
+function readDocumentEmbeddingModel(document: DocumentRecord) {
+  return readEmbeddingModelFromDocumentMetadata(document.metadata);
 }

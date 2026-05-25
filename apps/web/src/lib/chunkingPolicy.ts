@@ -105,36 +105,3 @@ export const CHUNKING_FIELD_HELP: Record<ChunkingPolicyField, string> = {
   semantic_threshold: "语义断点阈值。数值越高，通常越不容易断开，块会更长。",
   window_size: "句子滑窗上下文范围，只影响每块 metadata 中的 window_context。",
 };
-
-export function buildChunkingPolicyFromForm(data: FormData): ChunkingPolicyInput {
-  const chunkSize = parseNumber(data.get("chunk_size"), DEFAULT_CHUNKING_POLICY.chunk_size);
-
-  return {
-    strategy: parseStrategy(data.get("strategy")),
-    language: "zh",
-    chunk_size: chunkSize,
-    overlap_ratio: parseNumber(data.get("overlap_ratio"), DEFAULT_CHUNKING_POLICY.overlap_ratio),
-    max_chunk_size: parseNumber(data.get("max_chunk_size"), Math.max(chunkSize, 1200)),
-    semantic_buffer_size: parseNumber(
-      data.get("semantic_buffer_size"),
-      DEFAULT_CHUNKING_POLICY.semantic_buffer_size,
-    ),
-    semantic_threshold: parseNumber(
-      data.get("semantic_threshold"),
-      DEFAULT_CHUNKING_POLICY.semantic_threshold,
-    ),
-    window_size: parseNumber(data.get("window_size"), DEFAULT_CHUNKING_POLICY.window_size),
-  };
-}
-
-function parseStrategy(value: FormDataEntryValue | null): ChunkingStrategy {
-  const raw = String(value || DEFAULT_CHUNKING_POLICY.strategy);
-  return CHUNKING_STRATEGY_OPTIONS.some((option) => option.value === raw)
-    ? (raw as ChunkingStrategy)
-    : DEFAULT_CHUNKING_POLICY.strategy;
-}
-
-function parseNumber(value: FormDataEntryValue | null, fallback: number): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
