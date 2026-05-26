@@ -9,13 +9,18 @@ from typing import Any, Dict
 API_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(API_ROOT / "src"))
 
-from rag_platform.services.prompt_gate import load_prompt_manifest, run_prompt_gate  # noqa: E402
+from rag_platform.services.prompt_gate import (  # noqa: E402
+    extract_langfuse_prompt_payload,
+    load_prompt_manifest,
+    run_prompt_gate,
+)
 
 
 def main() -> int:
     args = _parse_args()
     manifest = load_prompt_manifest(args.manifest)
     event_payload = _load_event_payload(args)
+    _print_langfuse_prompt_payload(event_payload)
     report = run_prompt_gate(manifest, event_payload=event_payload)
     print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2))
     return 0 if report.passed else 1
@@ -56,6 +61,15 @@ def _read_json(path: Path) -> Dict[str, Any]:
     with path.open("r", encoding="utf-8") as file:
         payload = json.load(file)
     return payload if isinstance(payload, dict) else {}
+
+
+def _print_langfuse_prompt_payload(event_payload: Dict[str, Any]) -> None:
+    prompt_payload = extract_langfuse_prompt_payload(event_payload)
+    if not prompt_payload:
+        print("Langfuse prompt payload: <not found in this GitHub event>")
+        return
+    print("Langfuse prompt payload:")
+    print(json.dumps(prompt_payload, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
