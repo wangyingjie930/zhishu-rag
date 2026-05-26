@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from rag_platform.db.models import ChatMessage, ChatSession
 from rag_platform.domain.enums import MessageRole
 from rag_platform.schemas.rag import ChatResponse, Citation
-from rag_platform.services.llm.provider import get_llm_provider
+from rag_platform.services.llm.provider import LLMGeneration, get_llm_provider
 from rag_platform.services.observability import get_langfuse_observability
 from rag_platform.services.retrieval.hybrid import HybridRetriever
 
@@ -107,11 +107,13 @@ class ChatService:
                 },
                 model=getattr(self.llm, "model", self.llm.__class__.__name__),
             ) as llm_observation:
-                answer = await self.llm.answer(message, chunks)
+                generation = await self._generate_answer(message, chunks)
+                answer = generation.answer
                 self.observability.update_observation(
                     llm_observation,
                     output={"answer": answer},
-                    metadata={"answer_length": len(answer)},
+                    metadata={"answer_length": len(answer), **generation.prompt_metadata},
+                    prompt=generation.prompt,
                 )
 
             citations: List[Citation] = [
@@ -164,3 +166,9 @@ class ChatService:
             }
             for chunk in chunks
         ]
+
+    async def _generate_answer(self, question: str, chunks) -> LLMGeneration:
+        generate_answer = getattr(self.llm, "generate_answer", None)
+        if callable(generate_answer):
+            return await generate_answer(question, chunks)
+        return LLMGeneration(answer=await self.llm.answer(question, chunks))

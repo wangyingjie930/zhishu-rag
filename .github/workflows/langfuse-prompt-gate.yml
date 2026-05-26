@@ -1,0 +1,65 @@
+name: Langfuse Prompt Gate
+
+on:
+  repository_dispatch:
+    types: [langfuse-prompt-update]
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "prompts/**"
+      - "experiments/**"
+      - "apps/api/scripts/prompt_gate.py"
+      - "apps/api/src/rag_platform/services/prompts.py"
+      - "apps/api/src/rag_platform/services/prompt_gate.py"
+      - "apps/api/src/rag_platform/services/prompt_cicd.py"
+      - "apps/api/tests/test_prompt_cicd.py"
+      - ".github/workflows/langfuse-prompt-gate.yml"
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: read
+
+jobs:
+  prompt-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Validate prompt manifest and Langfuse payload
+        run: python apps/api/scripts/prompt_gate.py --manifest prompts/manifest.json --github-event "$GITHUB_EVENT_PATH"
+      - name: Install API test dependencies
+        working-directory: apps/api
+        run: python -m pip install -e ".[dev]"
+      - name: Run prompt CI tests
+        working-directory: apps/api
+        run: python -m pytest tests/test_prompt_cicd.py
+
+  langfuse-experiment:
+    needs: prompt-gate
+    if: ${{ vars.LANGFUSE_EXPERIMENTS_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: langfuse/experiment-action@887e7936bdf64a2197aa7dcfdc8a9e4afd85e229 # v1.0.3
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_OPENAI_BASE_URL: ${{ vars.LLM_OPENAI_BASE_URL }}
+          LLM_MODEL: ${{ vars.LLM_MODEL }}
+          LLM_MAX_OUTPUT_TOKENS: ${{ vars.LLM_MAX_OUTPUT_TOKENS }}
+          RAG_ANSWER_PROMPT_NAME: ${{ vars.RAG_ANSWER_PROMPT_NAME || 'rag-answer' }}
+          RAG_ANSWER_PROMPT_LABEL: ${{ vars.RAG_ANSWER_PROMPT_LABEL || 'candidate' }}
+          RAG_PROMPT_GATE_MIN_EXPECTED_MATCH: ${{ vars.RAG_PROMPT_GATE_MIN_EXPECTED_MATCH || '0.8' }}
+        with:
+          langfuse_public_key: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          langfuse_secret_key: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          langfuse_base_url: ${{ vars.LANGFUSE_BASE_URL || 'https://cloud.langfuse.com' }}
+          experiment_path: experiments/rag_answer_gate.py
+          dataset_name: ${{ vars.LANGFUSE_RAG_DATASET || 'rag-answer-regression' }}
+          github_token: ${{ github.token }}

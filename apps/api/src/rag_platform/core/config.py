@@ -48,6 +48,14 @@ class Settings(BaseSettings):
     langfuse_base_url: str = ""
     langfuse_environment: str = ""
     langfuse_sample_rate: float = Field(default=1.0, ge=0, le=1)
+    rag_answer_prompt_name: str = "rag-answer"
+    rag_answer_prompt_label: str = "production"
+    rag_answer_prompt_cache_ttl_seconds: int = 300
+    langfuse_prompt_webhook_secret: str = ""
+    langfuse_prompt_webhook_tolerance_seconds: int = 300
+    github_repository_dispatch_url: str = ""
+    github_repository_dispatch_token: str = ""
+    github_repository_dispatch_event_type: str = "langfuse-prompt-update"
     web_origin: str = "http://localhost:5173"
     upload_dir: Path = Field(default=Path("uploads"))
 

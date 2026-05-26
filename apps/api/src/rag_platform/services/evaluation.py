@@ -20,7 +20,7 @@ from rag_platform.db.models import (
     KnowledgeBase,
 )
 from rag_platform.domain.enums import MessageRole
-from rag_platform.services.llm.provider import LLMProvider, get_llm_provider
+from rag_platform.services.llm.provider import LLMGeneration, LLMProvider, get_llm_provider
 from rag_platform.services.observability import get_langfuse_observability
 from rag_platform.services.retrieval.hybrid import HybridRetriever, RetrievedChunk
 
@@ -569,11 +569,13 @@ class EvaluationService:
                 },
                 model=getattr(self.llm, "model", self.llm.__class__.__name__),
             ) as llm_observation:
-                response = await self.llm.answer(sample.user_input, chunks)
+                generation = await self._generate_answer(sample.user_input, chunks)
+                response = generation.answer
                 self.observability.update_observation(
                     llm_observation,
                     output={"answer": response},
-                    metadata={"answer_length": len(response)},
+                    metadata={"answer_length": len(response), **generation.prompt_metadata},
+                    prompt=generation.prompt,
                 )
 
             citations = self._chunks_to_citations(chunks)
@@ -759,3 +761,13 @@ class EvaluationService:
                 }
             )
         return normalized
+
+    async def _generate_answer(
+        self,
+        question: str,
+        chunks: List[RetrievedChunk],
+    ) -> LLMGeneration:
+        generate_answer = getattr(self.llm, "generate_answer", None)
+        if callable(generate_answer):
+            return await generate_answer(question, chunks)
+        return LLMGeneration(answer=await self.llm.answer(question, chunks))

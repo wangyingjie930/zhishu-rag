@@ -7,6 +7,7 @@ from rag_platform.api.v1 import (
     evaluation,
     health,
     knowledge_bases,
+    langfuse,
 )
 
 api_router = APIRouter()
@@ -16,3 +17,4 @@ api_router.include_router(documents.router, prefix="/documents", tags=["document
 api_router.include_router(embedding_models.router, prefix="/embedding-models", tags=["embedding-models"])
 api_router.include_router(chat.router, prefix="/chat", tags=["chat"])
 api_router.include_router(evaluation.router, prefix="/eval", tags=["eval"])
+api_router.include_router(langfuse.router, prefix="/langfuse", tags=["langfuse"])

@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "prompts": [
+    {
+      "name": "rag-answer",
+      "type": "chat",
+      "owner": "rag-platform",
+      "description": "企业知识库问答主回答 prompt；运行时按 label 拉取，生产默认读取 production。",
+      "required_variables": ["question", "contexts"],
+      "release_labels": ["candidate", "staging", "production"],
+      "fallback": [
+        {
+          "role": "system",
+          "content": "你是企业知识库问答助手。只根据给定的知识库片段回答；如果片段不足以回答，就说明没有检索到足够依据。"
+        },
+        {
+          "role": "user",
+          "content": "问题：{{question}}\n\n知识库片段：\n{{contexts}}"
+        }
+      ],
+      "config_schema": {
+        "allowed_keys": ["model", "temperature", "max_tokens", "response_format", "tools", "tool_choice"],
+        "defaults": {
+          "temperature": 0.2
+        }
+      },
+      "quality_gates": {
+        "dataset": "rag-answer-regression",
+        "metrics": {
+          "contains_expected": {
+            "min": 0.8
+          },
+          "avg_expected_match": {
+            "min": 0.8
+          }
+        }
+      }
+    }
+  ]
+}

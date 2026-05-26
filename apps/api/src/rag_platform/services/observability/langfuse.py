@@ -83,6 +83,7 @@ class LangfuseObservability:
         input_data: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         model: Optional[str] = None,
+        prompt: Optional[Any] = None,
     ) -> Iterator[Any]:
         manager = self._start_observation(
             name=name,
@@ -90,6 +91,7 @@ class LangfuseObservability:
             input_data=input_data,
             metadata=metadata,
             model=model,
+            prompt=prompt,
         )
         observation = self._enter_manager(manager)
         if observation is None:
@@ -147,6 +149,32 @@ class LangfuseObservability:
         except Exception as exc:  # pragma: no cover - Langfuse SDK/network boundary
             logger.warning("Langfuse flush failed: %s", exc)
 
+    def get_prompt(
+        self,
+        name: str,
+        prompt_type: str = "text",
+        label: Optional[str] = None,
+        cache_ttl_seconds: Optional[int] = None,
+        fallback: Optional[Any] = None,
+    ) -> Optional[Any]:
+        client = self._get_client()
+        if client is None:
+            return None
+
+        payload: Dict[str, Any] = {"type": prompt_type}
+        if label:
+            payload["label"] = label
+        if cache_ttl_seconds is not None:
+            payload["cache_ttl_seconds"] = cache_ttl_seconds
+        if fallback is not None:
+            payload["fallback"] = fallback
+
+        try:
+            return client.get_prompt(name, **payload)
+        except Exception as exc:  # pragma: no cover - Langfuse SDK/network boundary
+            logger.warning("Langfuse prompt fetch failed: %s", exc)
+            return None
+
     def _start_observation(
         self,
         name: str,
@@ -154,6 +182,7 @@ class LangfuseObservability:
         input_data: Optional[Dict[str, Any]],
         metadata: Optional[Dict[str, Any]],
         model: Optional[str] = None,
+        prompt: Optional[Any] = None,
     ):
         client = self._get_client()
         if client is None:
@@ -164,6 +193,8 @@ class LangfuseObservability:
             payload["input"] = input_data
         if model:
             payload["model"] = model
+        if prompt is not None:
+            payload["prompt"] = prompt
 
         try:
             manager = client.start_as_current_observation(**payload)

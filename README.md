@@ -74,6 +74,9 @@ LANGFUSE_SECRET_KEY=sk-lf-...
 LANGFUSE_HOST=https://cloud.langfuse.com
 LANGFUSE_ENVIRONMENT=local
 LANGFUSE_SAMPLE_RATE=1
+RAG_ANSWER_PROMPT_NAME=rag-answer
+RAG_ANSWER_PROMPT_LABEL=production
+RAG_ANSWER_PROMPT_CACHE_TTL_SECONDS=300
 ```
 
 上传结构：
@@ -83,6 +86,33 @@ LANGFUSE_SAMPLE_RATE=1
 - `retrieval`：检索主链路。
 - `query_transform`、`vector_recall`、`keyword_recall`、`fusion_rrf`、`multi_query_hybrid_recall`：检索阶段 observation。
 - `llm_answer`：回答模型 generation。
+
+## Langfuse Prompt CI/CD
+
+当前回答 prompt 已接入 Langfuse Prompt Management。运行时会按
+`RAG_ANSWER_PROMPT_NAME` + `RAG_ANSWER_PROMPT_LABEL` 拉取 chat prompt，并把 prompt version
+绑定到 `llm_answer` generation；如果未启用 Langfuse 或拉取失败，会使用
+与 `prompts/manifest.json` 保持一致的本地 fallback。
+
+推荐发布链路：
+
+1. 在 Langfuse 创建或修改 `rag-answer` prompt，新版本先打 `candidate` 或 `staging`。
+2. Langfuse `Prompts > Automations` 配置 prompt-version webhook，监听 created/updated。
+3. 如果直接用 Langfuse 的 GitHub Repository Dispatch，事件类型填 `langfuse-prompt-update`。
+4. 如果走本后端转发，webhook URL 填：
+   `https://<your-api-domain>/api/v1/langfuse/prompt-webhook`，并配置：
+
+```bash
+LANGFUSE_PROMPT_WEBHOOK_SECRET=...
+GITHUB_REPOSITORY_DISPATCH_URL=https://api.github.com/repos/<owner>/<repo>/dispatches
+GITHUB_REPOSITORY_DISPATCH_TOKEN=...
+GITHUB_REPOSITORY_DISPATCH_EVENT_TYPE=langfuse-prompt-update
+```
+
+GitHub Actions 会先运行 `apps/api/scripts/prompt_gate.py`，校验 prompt 变量、config 白名单和
+release label 对应的质量门禁配置。需要真实 Langfuse dataset 实验时，在 GitHub repository
+variables 中设置 `LANGFUSE_EXPERIMENTS_ENABLED=true`，并配置 `LANGFUSE_RAG_DATASET`、
+`RAG_ANSWER_PROMPT_LABEL`、模型相关变量和 Langfuse/OpenAI secrets。
 
 ## 当前能力
 
