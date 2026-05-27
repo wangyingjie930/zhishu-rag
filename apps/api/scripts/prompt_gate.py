@@ -68,6 +68,21 @@ def _print_langfuse_prompt_payload(event_payload: Dict[str, Any]) -> None:
     if not prompt_payload:
         print("Langfuse prompt payload: <not found in this GitHub event>")
         return
+    print("Langfuse event summary:")
+    print(
+        json.dumps(
+            {
+                "github_event_action": event_payload.get("action"),
+                "langfuse_event_type": event_payload.get("type"),
+                "langfuse_event_action": event_payload.get("action"),
+                "prompt_name": prompt_payload.get("name"),
+                "prompt_version": prompt_payload.get("version"),
+                "prompt_labels": prompt_payload.get("labels"),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
     print("Langfuse prompt payload:")
     print(json.dumps(prompt_payload, ensure_ascii=False, indent=2))
 

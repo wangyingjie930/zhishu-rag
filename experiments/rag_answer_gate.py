@@ -1,8 +1,19 @@
 import os
 from typing import Any, Dict, Iterable, List, Optional
 
-from langfuse import Evaluation, RegressionError, RunnerContext, get_client
+from langfuse import Evaluation, get_client
 from langfuse.openai import OpenAI
+
+try:
+    from langfuse import RegressionError
+except ImportError:
+
+    class RegressionError(RuntimeError):
+        def __init__(self, **kwargs: Any) -> None:
+            super().__init__(
+                "Experiment regression: "
+                f"{kwargs.get('metric')}={kwargs.get('value')} < {kwargs.get('threshold')}"
+            )
 
 
 PROMPT_NAME = os.getenv("RAG_ANSWER_PROMPT_NAME", "rag-answer")
@@ -11,7 +22,7 @@ DEFAULT_MODEL = os.getenv("LLM_MODEL", "gpt-4.1-mini")
 MIN_EXPECTED_MATCH = float(os.getenv("RAG_PROMPT_GATE_MIN_EXPECTED_MATCH", "0.8"))
 
 
-def experiment(context: RunnerContext):
+def experiment(context: Any):
     result = context.run_experiment(
         name=f"RAG answer prompt gate: {PROMPT_NAME}@{PROMPT_LABEL}",
         task=answer_question,
